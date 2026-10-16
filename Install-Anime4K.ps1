@@ -288,8 +288,8 @@ function Install-AnimePreset {
 $Script:MainXaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="mpv.net + Anime4K — Установщик" Height="740" Width="930"
-        MinHeight="680" MinWidth="860" WindowStartupLocation="CenterScreen"
+        Title="mpv.net + Anime4K — Установщик" Height="880" Width="980"
+        MinHeight="820" MinWidth="900" WindowStartupLocation="CenterScreen"
         Background="#202020" Foreground="#E6E6E6" FontFamily="Segoe UI Variable, Segoe UI" FontSize="14">
   <Window.Resources>
     <!-- Токены: только Brush (Color->Brush через StaticResource падает) -->
