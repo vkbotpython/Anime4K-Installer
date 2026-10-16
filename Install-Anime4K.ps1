@@ -290,34 +290,192 @@ $Script:MainXaml = @'
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="mpv.net + Anime4K — Установщик" Height="740" Width="930"
         MinHeight="680" MinWidth="860" WindowStartupLocation="CenterScreen"
-        Background="#16181D" Foreground="#E6E6E6" FontFamily="Segoe UI" FontSize="14">
+        Background="#202020" Foreground="#E6E6E6" FontFamily="Segoe UI Variable, Segoe UI" FontSize="14">
   <Window.Resources>
+    <!-- Токены: только Brush (Color->Brush через StaticResource падает) -->
+    <SolidColorBrush x:Key="B_Card" Color="#2B2B2B"/>
+    <SolidColorBrush x:Key="B_CardHover" Color="#323232"/>
+    <SolidColorBrush x:Key="B_Subtle" Color="#2D2D2D"/>
+    <SolidColorBrush x:Key="B_Pressed" Color="#262626"/>
+    <SolidColorBrush x:Key="B_Log" Color="#101010"/>
+    <SolidColorBrush x:Key="B_LogText" Color="#D6D6D6"/>
+    <SolidColorBrush x:Key="B_Border" Color="#333333"/>
+    <SolidColorBrush x:Key="B_BorderStrong" Color="#454545"/>
+    <SolidColorBrush x:Key="B_Accent" Color="#60CDFF"/>
+    <SolidColorBrush x:Key="B_AccentHover" Color="#70D3FF"/>
+    <SolidColorBrush x:Key="B_AccentPressed" Color="#40B0E0"/>
+    <SolidColorBrush x:Key="B_OnAccent" Color="#000000"/>
+    <SolidColorBrush x:Key="B_TextPrimary" Color="#FFFFFF"/>
+    <SolidColorBrush x:Key="B_TextSec" Color="#C7C7C7"/>
+    <SolidColorBrush x:Key="B_Success" Color="#6CCB5F"/>
+    <SolidColorBrush x:Key="B_Warning" Color="#FCE100"/>
+    <SolidColorBrush x:Key="B_Error" Color="#FF99A4"/>
+    <SolidColorBrush x:Key="B_SuccessBg" Color="#1A3320"/>
+    <SolidColorBrush x:Key="B_WarningBg" Color="#3A3000"/>
+    <SolidColorBrush x:Key="B_ErrorBg" Color="#3A1D20"/>
+    <FontFamily x:Key="F_Mono">Cascadia Code, Consolas</FontFamily>
+    <FontFamily x:Key="F_Icons">Segoe MDL2 Assets</FontFamily>
+    <!-- Focus-ring: только рамка (AdornedElementPlaceholder здесь лишний) -->
+    <Style x:Key="FocusRing">
+      <Setter Property="Control.Template">
+        <Setter.Value>
+          <ControlTemplate>
+            <Rectangle Margin="-3" RadiusX="5" RadiusY="5" StrokeThickness="2"
+                       Stroke="{StaticResource B_Accent}" SnapsToDevicePixels="True"/>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+    <!-- Карточка: без Margin в стиле, ритм задают explicit Margin у инстансов -->
     <Style x:Key="Card" TargetType="Border">
-      <Setter Property="Background" Value="#1F222B"/>
-      <Setter Property="BorderBrush" Value="#2C313C"/>
+      <Setter Property="Background" Value="{StaticResource B_Card}"/>
+      <Setter Property="BorderBrush" Value="{StaticResource B_Border}"/>
       <Setter Property="BorderThickness" Value="1"/>
-      <Setter Property="CornerRadius" Value="12"/>
-      <Setter Property="Padding" Value="14"/>
-      <Setter Property="Margin" Value="0,0,0,12"/>
+      <Setter Property="CornerRadius" Value="8"/>
+      <Setter Property="Padding" Value="16"/>
+      <Style.Triggers>
+        <Trigger Property="IsMouseOver" Value="True">
+          <Setter Property="BorderBrush" Value="{StaticResource B_BorderStrong}"/>
+        </Trigger>
+      </Style.Triggers>
     </Style>
     <Style x:Key="Muted" TargetType="TextBlock">
-      <Setter Property="Foreground" Value="#9AA0AE"/>
-      <Setter Property="FontSize" Value="12.5"/>
+      <Setter Property="Foreground" Value="{StaticResource B_TextSec}"/>
+      <Setter Property="FontSize" Value="12"/>
       <Setter Property="TextWrapping" Value="Wrap"/>
+      <Setter Property="LineHeight" Value="17"/>
     </Style>
     <Style x:Key="H2" TargetType="TextBlock">
-      <Setter Property="FontSize" Value="15"/>
+      <Setter Property="FontSize" Value="14"/>
       <Setter Property="FontWeight" Value="SemiBold"/>
-      <Setter Property="Margin" Value="0,0,0,6"/>
+      <Setter Property="Foreground" Value="{StaticResource B_TextPrimary}"/>
+      <Setter Property="Margin" Value="0,8,0,8"/>
     </Style>
-    <Style TargetType="Button">
-      <Setter Property="Background" Value="#2A2E3A"/>
-      <Setter Property="Foreground" Value="#E6E6E6"/>
+    <Style x:Key="Badge" TargetType="Border">
+      <Setter Property="CornerRadius" Value="4"/>
+      <Setter Property="Padding" Value="8,3"/>
+      <Setter Property="Margin" Value="0,8,0,0"/>
+      <Setter Property="HorizontalAlignment" Value="Left"/>
+    </Style>
+    <Style x:Key="Kbd" TargetType="Border">
+      <Setter Property="Background" Value="{StaticResource B_Log}"/>
+      <Setter Property="BorderBrush" Value="{StaticResource B_BorderStrong}"/>
       <Setter Property="BorderThickness" Value="1"/>
-      <Setter Property="BorderBrush" Value="#3A4050"/>
-      <Setter Property="Padding" Value="12,7"/>
+      <Setter Property="CornerRadius" Value="4"/>
+      <Setter Property="Padding" Value="6,2"/>
+      <Setter Property="Margin" Value="0,0,6,0"/>
+    </Style>
+    <!-- Два шаблона: secondary и primary (общий hover не должен перебивать accent) -->
+    <ControlTemplate x:Key="TplButton" TargetType="Button">
+      <Border x:Name="b" Background="{TemplateBinding Background}"
+              BorderBrush="{TemplateBinding BorderBrush}"
+              BorderThickness="{TemplateBinding BorderThickness}"
+              CornerRadius="4" Padding="{TemplateBinding Padding}">
+        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+      </Border>
+      <ControlTemplate.Triggers>
+        <Trigger Property="IsMouseOver" Value="True">
+          <Setter TargetName="b" Property="Background" Value="{StaticResource B_CardHover}"/>
+        </Trigger>
+        <Trigger Property="IsPressed" Value="True">
+          <Setter TargetName="b" Property="Background" Value="{StaticResource B_Pressed}"/>
+        </Trigger>
+        <Trigger Property="IsEnabled" Value="False">
+          <Setter TargetName="b" Property="Opacity" Value="0.45"/>
+        </Trigger>
+      </ControlTemplate.Triggers>
+    </ControlTemplate>
+    <ControlTemplate x:Key="TplPrimary" TargetType="Button">
+      <Border x:Name="b" Background="{TemplateBinding Background}"
+              CornerRadius="4" Padding="{TemplateBinding Padding}">
+        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+      </Border>
+      <ControlTemplate.Triggers>
+        <Trigger Property="IsMouseOver" Value="True">
+          <Setter TargetName="b" Property="Background" Value="{StaticResource B_AccentHover}"/>
+        </Trigger>
+        <Trigger Property="IsPressed" Value="True">
+          <Setter TargetName="b" Property="Background" Value="{StaticResource B_AccentPressed}"/>
+        </Trigger>
+        <Trigger Property="IsEnabled" Value="False">
+          <Setter TargetName="b" Property="Opacity" Value="0.45"/>
+        </Trigger>
+      </ControlTemplate.Triggers>
+    </ControlTemplate>
+    <Style TargetType="Button">
+      <Setter Property="MinHeight" Value="32"/>
+      <Setter Property="Padding" Value="12,6"/>
       <Setter Property="Margin" Value="0,0,8,0"/>
+      <Setter Property="Background" Value="{StaticResource B_Subtle}"/>
+      <Setter Property="Foreground" Value="{StaticResource B_TextPrimary}"/>
+      <Setter Property="BorderBrush" Value="{StaticResource B_BorderStrong}"/>
+      <Setter Property="BorderThickness" Value="1"/>
       <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="FocusVisualStyle" Value="{StaticResource FocusRing}"/>
+      <Setter Property="Template" Value="{StaticResource TplButton}"/>
+    </Style>
+    <Style x:Key="PrimaryButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+      <Setter Property="Template" Value="{StaticResource TplPrimary}"/>
+      <Setter Property="Background" Value="{StaticResource B_Accent}"/>
+      <Setter Property="Foreground" Value="{StaticResource B_OnAccent}"/>
+      <Setter Property="FontWeight" Value="SemiBold"/>
+      <Setter Property="FontSize" Value="14"/>
+      <Setter Property="MinHeight" Value="44"/>
+      <Setter Property="BorderThickness" Value="0"/>
+      <Setter Property="HorizontalAlignment" Value="Stretch"/>
+    </Style>
+    <!-- Прогресс: PART_Track=фон, PART_Indicator=заливка; indeterminate=мягкий pulse -->
+    <Style x:Key="FluentProgress" TargetType="ProgressBar">
+      <Setter Property="Height" Value="8"/>
+      <Setter Property="Minimum" Value="0"/>
+      <Setter Property="Maximum" Value="100"/>
+      <Setter Property="Background" Value="{StaticResource B_Border}"/>
+      <Setter Property="Foreground" Value="{StaticResource B_Accent}"/>
+      <Setter Property="BorderThickness" Value="0"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="ProgressBar">
+            <Grid ClipToBounds="True">
+              <Border x:Name="PART_Track" Background="{TemplateBinding Background}" CornerRadius="4"/>
+              <Border x:Name="PART_Indicator" Background="{TemplateBinding Foreground}"
+                      CornerRadius="4" HorizontalAlignment="Left"/>
+            </Grid>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsIndeterminate" Value="True">
+                <Setter TargetName="PART_Indicator" Property="HorizontalAlignment" Value="Stretch"/>
+                <Trigger.EnterActions>
+                  <BeginStoryboard>
+                    <Storyboard RepeatBehavior="Forever" AutoReverse="True">
+                      <DoubleAnimation Storyboard.TargetName="PART_Indicator"
+                                       Storyboard.TargetProperty="Opacity"
+                                       From="0.35" To="0.9" Duration="0:0:0.6"/>
+                    </Storyboard>
+                  </BeginStoryboard>
+                </Trigger.EnterActions>
+                <Trigger.ExitActions>
+                  <BeginStoryboard>
+                    <Storyboard>
+                      <DoubleAnimation Storyboard.TargetName="PART_Indicator"
+                                       Storyboard.TargetProperty="Opacity"
+                                       To="1" Duration="0:0:0.15"/>
+                    </Storyboard>
+                  </BeginStoryboard>
+                </Trigger.ExitActions>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+    <!-- Вариант A: TextBox оставляем (без смены логики Write-Log), монохром + префиксы -->
+    <Style x:Key="LogBox" TargetType="TextBox">
+      <Setter Property="Background" Value="{StaticResource B_Log}"/>
+      <Setter Property="Foreground" Value="{StaticResource B_LogText}"/>
+      <Setter Property="FontFamily" Value="{StaticResource F_Mono}"/>
+      <Setter Property="FontSize" Value="12"/>
+      <Setter Property="BorderBrush" Value="{StaticResource B_Border}"/>
+      <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="Padding" Value="10"/>
     </Style>
   </Window.Resources>
   <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="20">
@@ -385,13 +543,11 @@ $Script:MainXaml = @'
 
       <!-- Step 3: установка -->
       <TextBlock x:Name="txtStep3" Style="{StaticResource H2}" Text="Шаг 3 — Установка"/>
-      <Button x:Name="btnInstall" Content="⬇ Установить / Обновить всё" Height="46" FontSize="15" FontWeight="SemiBold"
-              Background="#7AA2F7" Foreground="#0B0E14" BorderThickness="0"/>
-      <ProgressBar x:Name="progressBar" Height="10" Margin="0,10,0,6" Minimum="0" Maximum="100" Value="0"/>
+      <Button x:Name="btnInstall" Style="{StaticResource PrimaryButton}" Content="Установить / Обновить всё" Height="46"/>
+      <ProgressBar x:Name="progressBar" Style="{StaticResource FluentProgress}" Margin="0,10,0,6" Minimum="0" Maximum="100" Value="0"/>
       <TextBlock x:Name="txtStatus" Style="{StaticResource Muted}" Text="Готов. Выберите пресет и нажмите «Установить»."/>
-      <Expander x:Name="expLog" Header="Логи" Foreground="#9AA0AE" Margin="0,8,0,0" IsExpanded="False">
-        <TextBox x:Name="txtLog" Height="130" Background="#0F1116" Foreground="#C9D1D9"
-                 FontFamily="Consolas" FontSize="12" IsReadOnly="True"
+      <Expander x:Name="expLog" Header="Логи" Foreground="#C7C7C7" Margin="0,8,0,0" IsExpanded="False">
+        <TextBox x:Name="txtLog" Style="{StaticResource LogBox}" Height="130" IsReadOnly="True"
                  VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
                  TextWrapping="NoWrap" AcceptsReturn="True"/>
       </Expander>
@@ -401,10 +557,10 @@ $Script:MainXaml = @'
         <StackPanel>
           <TextBlock x:Name="txtQuickTitle" Text="Quick Usage — как пользоваться Anime4K" FontWeight="Bold" FontSize="15" Margin="0,0,0,6"/>
           <TextBlock x:Name="txtQuickSub" Style="{StaticResource Muted}" Text="Mode A включён автоматически (так задано в mpv.conf из шаблона). Вручную:"/>
-          <TextBlock Margin="0,6,0,0" TextWrapping="Wrap"><Run Foreground="#7AA2F7" FontWeight="Bold" Text="Ctrl+1"/> — <Run x:Name="runModeA" Text="Mode A (оптимально для 1080p)"/></TextBlock>
-          <TextBlock TextWrapping="Wrap"><Run Foreground="#7AA2F7" FontWeight="Bold" Text="Ctrl+2"/> — <Run x:Name="runModeB" Text="Mode B (оптимально для 720p)"/></TextBlock>
-          <TextBlock TextWrapping="Wrap"><Run Foreground="#7AA2F7" FontWeight="Bold" Text="Ctrl+3"/> — <Run x:Name="runModeC" Text="Mode C (оптимально для 480p)"/></TextBlock>
-          <TextBlock TextWrapping="Wrap"><Run Foreground="#E06C75" FontWeight="Bold" Text="Ctrl+0"/> — <Run x:Name="runModeOff" Text="сбросить шейдеры (выключить Anime4K)"/></TextBlock>
+          <TextBlock Margin="0,6,0,0" TextWrapping="Wrap"><Run Foreground="#60CDFF" FontWeight="Bold" Text="Ctrl+1"/> — <Run x:Name="runModeA" Text="Mode A (оптимально для 1080p)"/></TextBlock>
+          <TextBlock TextWrapping="Wrap"><Run Foreground="#60CDFF" FontWeight="Bold" Text="Ctrl+2"/> — <Run x:Name="runModeB" Text="Mode B (оптимально для 720p)"/></TextBlock>
+          <TextBlock TextWrapping="Wrap"><Run Foreground="#60CDFF" FontWeight="Bold" Text="Ctrl+3"/> — <Run x:Name="runModeC" Text="Mode C (оптимально для 480p)"/></TextBlock>
+          <TextBlock TextWrapping="Wrap"><Run Foreground="#FF99A4" FontWeight="Bold" Text="Ctrl+0"/> — <Run x:Name="runModeOff" Text="сбросить шейдеры (выключить Anime4K)"/></TextBlock>
         </StackPanel>
       </Border>
 
@@ -772,11 +928,33 @@ function New-WpfWindow {
   return [Windows.Markup.XamlReader]::Load($reader)
 }
 
+# ------------------------------------------------- Fluent chrome (dark titlebar + Mica) ---
+# Guard: повторный Add-Type в той же сессии падает, поэтому -as [type] проверка.
+# Важно: Handle валиден только после SourceInitialized, вызов до ShowDialog с $h=0 молча ничего не сделает.
+if (-not ('Win.DwmNative' -as [type])) {
+  Add-Type -Namespace Win -Name DwmNative -MemberDefinition @'
+[System.Runtime.InteropServices.DllImport("dwmapi.dll")] public static extern int DwmSetWindowAttribute(System.IntPtr hwnd, int attr, ref int val, int size);
+'@
+}
+function Enable-FluentChrome {
+  param($win)
+  try {
+    $h = (New-Object System.Windows.Interop.WindowInteropHelper -ArgumentList $win).Handle
+    if ($h -eq [IntPtr]::Zero) { return $false } # ещё нет HWND — вызовет SourceInitialized
+    $dark = 1; [void][Win.DwmNative]::DwmSetWindowAttribute($h, 20, [ref]$dark, 4)
+    # Mica (38) на WPF с Transparent на части сборок даёт чисто чёрный клиент вместо текстуры,
+    # поэтому клиент оставляем сплошным #202020 — тёмный titlebar уже даёт Fluent-вид.
+    # Не раскомментировать без проверки на 22621+: $mica=2; DwmSetWindowAttribute(h,38)+Transparent.
+    return $true
+  } catch { return $false }
+}
+
 function Update-StatusUI {
   $mpv = Get-MpvNetStatus
   $dn = Get-DotnetStatus
-  $ok = [Windows.Media.Brushes]::LightGreen
-  $bad = [Windows.Media.Brushes]::Tomato
+  # Токены B_Success/B_Error вместо LightGreen/Tomato — иначе выбиваются из палитры
+  $ok = New-Object Windows.Media.SolidColorBrush ([Windows.Media.ColorConverter]::ConvertFromString('#6CCB5F'))
+  $bad = New-Object Windows.Media.SolidColorBrush ([Windows.Media.ColorConverter]::ConvertFromString('#FF99A4'))
   if ($mpv.Installed) {
     $Script:LblMpv.Text = $(T Installed) + $(if ($mpv.Version) { " • v$($mpv.Version)" }) + $(if ($mpv.Exe) { "`n$($mpv.Exe)" })
     $Script:DotMpv.Fill = $ok
@@ -809,6 +987,7 @@ function Start-FullInstall {
   $which = if ($Script:RbLow.IsChecked) { 'Low' } else { 'High' }
   $Script:BtnInstall.IsEnabled = $false
   $Script:Bar.IsIndeterminate = $false
+  try { $Script:Bar.Foreground = $Script:Window.FindResource('B_Accent') } catch {}
   try {
     if (-not (Test-IsAdmin)) {
       $r = [Windows.MessageBox]::Show($(T AdminMsg), $(T AdminTitle), 'YesNo', 'Warning')
@@ -877,6 +1056,7 @@ function Start-FullInstall {
 
     Update-StatusUI
     $Script:Bar.Value = 100
+    try { $Script:Bar.Foreground = $Script:Window.FindResource('B_Success') } catch {}
     $Script:LblStatus.Text = $(T StDone) -f $which, $Script:Cfg.ConfigDir
     Write-Log $(T DoneLog)
     [Windows.MessageBox]::Show($(T DoneMsg) -f $which, $Script:Cfg.ConfigDir,
@@ -887,6 +1067,7 @@ function Start-FullInstall {
     Write-Log ($_.ScriptStackTrace) 'ERROR'
     $Script:LblStatus.Text = $(T ErrStatus) -f $msg
     $Script:Bar.IsIndeterminate = $false
+    try { $Script:Bar.Foreground = $Script:Window.FindResource('B_Error') } catch {}
     [Windows.MessageBox]::Show($(T ErrMsg) -f $msg, $Script:Cfg.LogFile,
       $(T ErrTitle), 'OK', 'Error') | Out-Null
   } finally {
@@ -959,4 +1140,6 @@ $Script:Window.FindName('btnOpenConfig').Add_Click({
 
 Write-Log $(T OpenLog)
 Set-Language 'RU'
+# HWND готов только здесь; вызов раньше вернёт Zero и Mica не применится
+$Script:Window.Add_SourceInitialized({ [void](Enable-FluentChrome $Script:Window) })
 [void]$Script:Window.ShowDialog()
