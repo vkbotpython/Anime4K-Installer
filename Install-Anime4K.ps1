@@ -1089,6 +1089,13 @@ $Script:AboutXaml = @'
       <Setter Property="TextWrapping" Value="Wrap"/>
       <Setter Property="LineHeight" Value="17"/>
     </Style>
+    <!-- Иконки соцсетей: векторные контуры брендов (без внешних шрифтов/картинок).
+         FillRule=EvenOdd (по умолчанию) вырезает внутренние детали — треугольник
+         play у YouTube, самолётик у Telegram, буквы VK. Dzen — 4 лепестка. -->
+    <PathGeometry x:Key="Ic_YouTube" Figures="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/>
+    <PathGeometry x:Key="Ic_Telegram" Figures="M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.48.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z"/>
+    <PathGeometry x:Key="Ic_Vk" Figures="m9.489.004.729-.003h3.564l.73.003.914.01.433.007.418.011.403.014.388.016.374.021.36.025.345.03.333.033c1.74.196 2.933.616 3.833 1.516.9.9 1.32 2.092 1.516 3.833l.034.333.029.346.025.36.02.373.025.588.012.41.013.644.009.915.004.98-.001 3.313-.003.73-.01.914-.007.433-.011.418-.014.403-.016.388-.021.374-.025.36-.03.345-.033.333c-.196 1.74-.616 2.933-1.516 3.833-.9.9-2.092 1.32-3.833 1.516l-.333.034-.346.029-.36.025-.373.02-.588.025-.41.012-.644.013-.915.009-.98.004-3.313-.001-.73-.003-.914-.01-.433-.007-.418-.011-.403-.014-.388-.016-.374-.021-.36-.025-.345-.03-.333-.033c-1.74-.196-2.933-.616-3.833-1.516-.9-.9-1.32-2.092-1.516-3.833l-.034-.333-.029-.346-.025-.36-.02-.373-.025-.588-.012-.41-.013-.644-.009-.915-.004-.98.001-3.313.003-.73.01-.914.007-.433.011-.418.014-.403.016-.388.021-.374.025-.36.03-.345.033-.333c.196-1.74.616-2.933 1.516-3.833.9-.9 2.092-1.32 3.833-1.516l.333-.034.346-.029.36-.025.373-.02.588-.025.41-.012.644-.013.915-.009ZM6.79 7.3H4.05c.13 6.24 3.25 9.99 8.72 9.99h.31v-3.57c2.01.2 3.53 1.67 4.14 3.57h2.84c-.78-2.84-2.83-4.41-4.11-5.01 1.28-.74 3.08-2.54 3.51-4.98h-2.58c-.56 1.98-2.22 3.78-3.8 3.95V7.3H10.5v6.92c-1.6-.4-3.62-2.34-3.71-6.92Z"/>
+    <PathGeometry x:Key="Ic_Dzen" Figures="M24.72 0c.12 9.73.79 15.2 4.44 18.84 3.65 3.65 9.12 4.31 18.85 4.44C47.63 10.59 37.41.37 24.72 0ZM18.85 18.84C22.5 15.2 23.16 9.73 23.28 0 10.59.37.37 10.59 0 23.28c9.73-.12 15.2-.79 18.85-4.44ZM0 24.72c.37 12.69 10.59 22.91 23.28 23.28-.12-9.73-.79-15.2-4.44-18.84-3.65-3.65-9.12-4.31-18.85-4.44ZM48 24.72c-9.73.12-15.2.79-18.85 4.44-3.65 3.65-4.31 9.12-4.44 18.84 12.69-.37 22.91-10.59 23.28-23.28Z"/>
   </Window.Resources>
   <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Padding="24">
     <StackPanel>
@@ -1098,10 +1105,34 @@ $Script:AboutXaml = @'
 
       <TextBlock x:Name="abtSocialTitle" Style="{StaticResource H2}" Text="Соцсети автора"/>
       <WrapPanel>
-        <Button x:Name="btnYouTube"  Style="{StaticResource SoftButton}" Content="YouTube"/>
-        <Button x:Name="btnTelegram" Style="{StaticResource SoftButton}" Content="Telegram"/>
-        <Button x:Name="btnVk"       Style="{StaticResource SoftButton}" Content="VK"/>
-        <Button x:Name="btnDzen"     Style="{StaticResource SoftButton}" Content="Dzen"/>
+        <Button x:Name="btnYouTube" Style="{StaticResource SoftButton}" ToolTip="YouTube">
+          <StackPanel Orientation="Horizontal">
+            <Path Data="{StaticResource Ic_YouTube}" Fill="#FF0000" Width="16" Height="16"
+                  Stretch="Uniform" VerticalAlignment="Center" Margin="0,0,7,0"/>
+            <TextBlock Text="YouTube" VerticalAlignment="Center"/>
+          </StackPanel>
+        </Button>
+        <Button x:Name="btnTelegram" Style="{StaticResource SoftButton}" ToolTip="Telegram">
+          <StackPanel Orientation="Horizontal">
+            <Path Data="{StaticResource Ic_Telegram}" Fill="#26A5E4" Width="16" Height="16"
+                  Stretch="Uniform" VerticalAlignment="Center" Margin="0,0,7,0"/>
+            <TextBlock Text="Telegram" VerticalAlignment="Center"/>
+          </StackPanel>
+        </Button>
+        <Button x:Name="btnVk" Style="{StaticResource SoftButton}" ToolTip="VK">
+          <StackPanel Orientation="Horizontal">
+            <Path Data="{StaticResource Ic_Vk}" Fill="#0077FF" Width="16" Height="16"
+                  Stretch="Uniform" VerticalAlignment="Center" Margin="0,0,7,0"/>
+            <TextBlock Text="VK" VerticalAlignment="Center"/>
+          </StackPanel>
+        </Button>
+        <Button x:Name="btnDzen" Style="{StaticResource SoftButton}" ToolTip="Dzen">
+          <StackPanel Orientation="Horizontal">
+            <Path Data="{StaticResource Ic_Dzen}" Fill="#FFFFFF" Width="16" Height="16"
+                  Stretch="Uniform" VerticalAlignment="Center" Margin="0,0,7,0"/>
+            <TextBlock Text="Dzen" VerticalAlignment="Center"/>
+          </StackPanel>
+        </Button>
       </WrapPanel>
 
       <TextBlock x:Name="abtDonateTitle" Style="{StaticResource H2}" Text="Поддержать автора"/>
