@@ -74,6 +74,9 @@ $Script:GuideWindow = $null
 $Script:AboutWindow = $null
 # Тост-таймер окна «О программе» (переключает «Спасибо…» / «✓ Номер скопирован»)
 $Script:AboutCopyTimer = $null
+# Тост-таймер кнопки «Проверить снова» (возвращает подпись после «✓ Обновлено»)
+$Script:RecheckTimer = $null
+$Script:RecheckText = $null
 
 # Кисти строк лога кэшируем: цвета берём из палитры окна, при отсутствии — фолбэк
 function Get-LogBrush {
@@ -1287,6 +1290,7 @@ $Script:T = @{
     WinTitle    = 'mpv.net + Anime4K — Установщик'
     Subtitle    = 'Системная установка • .NET 10 Desktop Runtime • GLSL-пресеты v4.0.1'
     Recheck     = '⟳ Проверить снова'
+    RecheckDone = '✓ Обновлено'
     Step1       = 'Шаг 1 — Проверка компонентов'
     MpvTitle    = 'mpv.net (системно)'
     Checking    = 'Проверка…'
@@ -1361,6 +1365,7 @@ $Script:T = @{
     WinTitle    = 'mpv.net + Anime4K — Installer'
     Subtitle    = 'System-wide install • .NET 10 Desktop Runtime • GLSL presets v4.0.1'
     Recheck     = '⟳ Check again'
+    RecheckDone = '✓ Updated'
     Step1       = 'Step 1 — Check components'
     MpvTitle    = 'mpv.net (system-wide)'
     Checking    = 'Checking…'
@@ -1445,6 +1450,9 @@ function Set-Language {
   $w.Title = T WinTitle
   $w.FindName('txtSubtitle').Text    = T Subtitle
   $w.FindName('btnRecheck').Content  = T Recheck
+  # Если в этот момент активен тост «✓ Обновлено», останавливаем его — иначе таймер
+  # вернёт старую подпись на прежнем языке и затрёт свежий перевод кнопки.
+  if ($Script:RecheckTimer) { try { $Script:RecheckTimer.Stop() } catch {} }
   $w.FindName('btnLang').Content     = T LangBtn
   $w.FindName('txtStep1').Text       = T Step1
   $w.FindName('txtMpvTitle').Text    = T MpvTitle
@@ -1577,7 +1585,29 @@ function Enable-FluentChrome {
   }
 }
 
+# Обратная связь по кнопке «Проверить снова»: на 2 секунды подменяем подпись на
+# «✓ Обновлено» и возвращаем исходную — иначе клик выглядит так, будто ничего не произошло.
+function Show-RecheckFeedback {
+  $btn = $Script:Window.FindName('btnRecheck')
+  if (-not $btn) { return }
+  $Script:RecheckText = T Recheck
+  $btn.Content = T RecheckDone
+  if (-not $Script:RecheckTimer) {
+    $t = New-Object System.Windows.Threading.DispatcherTimer
+    $t.Interval = [TimeSpan]::FromSeconds(2)
+    $t.Add_Tick({
+      $Script:RecheckTimer.Stop()
+      $b = $Script:Window.FindName('btnRecheck')
+      if ($b) { $b.Content = $Script:RecheckText }
+    })
+    $Script:RecheckTimer = $t
+  }
+  $Script:RecheckTimer.Stop()
+  $Script:RecheckTimer.Start()
+}
+
 function Update-StatusUI {
+  param([switch]$Notify)
   $mpv = Get-MpvNetStatus
   $dn = Get-DotnetStatus
   # Токены B_Success/B_Error вместо LightGreen/Tomato — иначе выбиваются из палитры
@@ -1611,6 +1641,7 @@ function Update-StatusUI {
     [Windows.Threading.Dispatcher]::CurrentDispatcher.Invoke(
       [action]{}, [Windows.Threading.DispatcherPriority]::Background)
   } catch {}
+  if ($Notify) { Show-RecheckFeedback }
 }
 
 function Show-AdvancedWindow {
@@ -1861,7 +1892,7 @@ $Script:TxtLog    = $Script:Window.FindName('txtLog')
 
 if ($Preset -eq 'Low') { $Script:RbLow.IsChecked = $true } else { $Script:RbHigh.IsChecked = $true }
 
-$Script:Window.FindName('btnRecheck').Add_Click({ Update-StatusUI })
+$Script:Window.FindName('btnRecheck').Add_Click({ Update-StatusUI -Notify })
 $Script:Window.FindName('btnLang').Add_Click({
   if ($Script:Lang -eq 'RU') { Set-Language 'EN' } else { Set-Language 'RU' }
 })
