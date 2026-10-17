@@ -50,6 +50,7 @@ $Script:Lang = 'RU'
 $Script:TxtLog = $null
 $Script:Bar = $null
 $Script:LblStatus = $null
+$Script:GuideWindow = $null
 
 function Write-Log {
   param([string]$Message, [string]$Level = 'INFO')
@@ -1085,8 +1086,11 @@ function Show-AdvancedWindow {
   $x = if ($Script:Lang -eq 'EN') { $Script:AdvancedXamlEn } else { $Script:AdvancedXaml }
   $w = New-WpfWindow $x
   try { $w.Owner = $Script:Window } catch {}
-  # То же Fluent-оформление, что и у главного окна (HWND готов к SourceInitialized)
-  $w.Add_SourceInitialized(({ [void](Enable-FluentChrome $w) }).GetNewClosure())
+  # Как у главного окна: обработчик обращается к переменной скрипта. GetNewClosure()
+  # использовать нельзя — он исполняет код в отдельном модуле, где не видны функции
+  # скрипта (падало с CommandNotFoundException на Enable-FluentChrome).
+  $Script:GuideWindow = $w
+  $w.Add_SourceInitialized({ [void](Enable-FluentChrome $Script:GuideWindow) })
   $w.ShowDialog() | Out-Null
 }
 
