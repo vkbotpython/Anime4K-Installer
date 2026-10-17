@@ -51,6 +51,8 @@ $Script:TxtLog = $null
 $Script:LogBrushes = @{}
 $Script:Bar = $null
 $Script:LblStatus = $null
+$Script:LblPreset = $null
+$Script:DotPreset = $null
 $Script:GuideWindow = $null
 
 # Кисти строк лога кэшируем: цвета берём из палитры окна, при отсутствии — фолбэк
@@ -190,6 +192,47 @@ function Get-DotnetStatus {
     }
   } catch {}
   return $res
+}
+
+# ------------------------------------------------- Detection: Anime4K preset ---
+function Get-AnimePresetStatus {
+  # Какой GLSL-пресет Anime4K уже развёрнут в %APPDATA%\mpv.net.
+  # Оба архива Tama47 v4.0.1 содержат один и тот же набор .glsl — отличия в
+  # mpv.conf/input.conf: Low помечен «lower-end GPU / (Fast)» и использует
+  # _S-варианты шейдеров, High — «higher-end GPU / (HQ)» и _VL-варианты.
+  # Возвращает @{ State = 'None'|'Low'|'High'|'Unknown'; Files = <кол-во .glsl> }
+  $res = @{ State = 'None'; Files = 0 }
+  $conf = Join-Path $Script:Cfg.ConfigDir 'mpv.conf'
+  $shDir = Join-Path $Script:Cfg.ConfigDir 'shaders'
+  try { $res.Files = @(Get-ChildItem $shDir -Filter '*.glsl' -File -ErrorAction SilentlyContinue).Count } catch { $res.Files = 0 }
+  if (-not (Test-Path $conf)) {
+    # конфига нет: шейдеры без конфига — частичная (неопознанная) установка
+    if ($res.Files -gt 0) { $res.State = 'Unknown' }
+    return $res
+  }
+  $blob = ''
+  foreach ($f in @($conf, (Join-Path $Script:Cfg.ConfigDir 'input.conf'))) {
+    if (Test-Path $f) { try { $blob += (Get-Content $f -Raw -ErrorAction SilentlyContinue) } catch {} }
+  }
+  if ($blob -match 'higher-end GPU' -or $blob -match 'Mode A \(HQ\)' -or $blob -match '_VL\.glsl') {
+    $res.State = 'High'
+  } elseif ($blob -match 'lower-end GPU' -or $blob -match 'Mode A \(Fast\)' -or $blob -match '_S\.glsl') {
+    $res.State = 'Low'
+  } elseif ($blob -match 'Anime4K_') {
+    $res.State = 'Unknown'   # шейдеры есть, но цепочки не из шаблонов Low/High
+  }
+  return $res
+}
+
+function Get-PresetStateText {
+  # Человекочитаемое описание состояния — общее для UI и логов
+  param([Parameter(Mandatory)][hashtable]$Pst)
+  switch ($Pst.State) {
+    'Low'     { return (T PstLow) }
+    'High'    { return (T PstHigh) }
+    'Unknown' { return (T PstUnknown) }
+    default   { return (T PstNone) }
+  }
 }
 
 # ------------------------------------------------- Download (с прогрессом, UI жив) ---
@@ -699,6 +742,11 @@ $Script:MainXaml = @'
 
       <!-- Step 2: пресет -->
       <TextBlock x:Name="txtStep2" Style="{StaticResource H2}" Text="Шаг 2 — Пресет Anime4K (папка %APPDATA%\mpv.net, перезапись молча)"/>
+      <!-- Статус: какой пресет уже установлен (детект по mpv.conf/input.conf) -->
+      <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+        <Ellipse x:Name="dotPreset" Width="12" Height="12" Fill="#8A8F9C" Margin="0,0,8,0" VerticalAlignment="Center"/>
+        <TextBlock x:Name="lblPresetStatus" Style="{StaticResource Muted}" Text="Проверка…" VerticalAlignment="Center"/>
+      </StackPanel>
       <UniformGrid Columns="2">
         <Border Style="{StaticResource Card}" Margin="0,0,6,12">
           <StackPanel>
@@ -1000,6 +1048,11 @@ $Script:T = @{
     LowDesc     = 'GTX 980, GTX 1060, RX 570. Быстрые шейдеры, меньше нагрузка.'
     HighDesc    = 'GTX 1080, RTX 2070/3060, RX 590, Vega 56, 5700XT, 6600XT.'
     ShaderNote  = 'Порядок и приоритет шейдеров берутся из mpv.conf внутри архива — скрипт их не переписывает, только копирует файлы с перезаписью.'
+    PstNone     = 'Anime4K-шейдеры не установлены — будет развёрнут выбранный пресет.'
+    PstLow      = 'Уже установлен пресет Low-end GPU (определён по mpv.conf).'
+    PstHigh     = 'Уже установлен пресет High-end GPU (определён по mpv.conf).'
+    PstUnknown  = 'Установленные шейдеры не совпадают с шаблонами Low/High — mpv.conf мог быть изменён вручную.'
+    PstLog      = 'Состояние шейдеров до установки: {0}'
     Step3       = 'Шаг 3 — Установка'
     InstallBtn  = '⬇ Установить / Обновить всё'
     Ready       = 'Готов. Выберите пресет и нажмите «Установить».'
@@ -1058,6 +1111,11 @@ $Script:T = @{
     LowDesc     = 'GTX 980, GTX 1060, RX 570. Fast shaders, lower GPU load.'
     HighDesc    = 'GTX 1080, RTX 2070/3060, RX 590, Vega 56, 5700XT, 6600XT.'
     ShaderNote  = 'Shader order and priority come from mpv.conf inside the archive — the script does not rewrite them, it only copies files with overwrite.'
+    PstNone     = 'Anime4K shaders are not installed — the selected preset will be deployed.'
+    PstLow      = 'Already installed: Low-end GPU preset (detected via mpv.conf).'
+    PstHigh     = 'Already installed: High-end GPU preset (detected via mpv.conf).'
+    PstUnknown  = 'Installed shaders do not match the Low/High templates — mpv.conf may have been edited manually.'
+    PstLog      = 'Shader state before install: {0}'
     Step3       = 'Step 3 — Install'
     InstallBtn  = '⬇ Install / Update all'
     Ready       = 'Ready. Select a preset and click Install.'
@@ -1250,6 +1308,7 @@ function Update-StatusUI {
   # Токены B_Success/B_Error вместо LightGreen/Tomato — иначе выбиваются из палитры
   $ok = New-Object Windows.Media.SolidColorBrush ([Windows.Media.ColorConverter]::ConvertFromString('#6CCB5F'))
   $bad = New-Object Windows.Media.SolidColorBrush ([Windows.Media.ColorConverter]::ConvertFromString('#FF99A4'))
+  $warn = New-Object Windows.Media.SolidColorBrush ([Windows.Media.ColorConverter]::ConvertFromString('#FCE100'))
   if ($mpv.Installed) {
     $Script:LblMpv.Text = $(T Installed) + $(if ($mpv.Version) { " • v$($mpv.Version)" }) + $(if ($mpv.Exe) { "`n$($mpv.Exe)" })
     $Script:DotMpv.Fill = $ok
@@ -1263,6 +1322,15 @@ function Update-StatusUI {
   } else {
     $Script:LblDot.Text = T DotNotFound
     $Script:DotNet.Fill = $bad
+  }
+  # Шаг 2: какой пресет шейдеров уже установлен (Low/High/не распознан/нет)
+  $pst = Get-AnimePresetStatus
+  $Script:LblPreset.Text = Get-PresetStateText $pst
+  $Script:DotPreset.Fill = switch ($pst.State) {
+    'Low'     { $ok }
+    'High'    { $ok }
+    'Unknown' { $warn }
+    default   { $bad }
   }
   try {
     [Windows.Threading.Dispatcher]::CurrentDispatcher.Invoke(
@@ -1349,6 +1417,8 @@ function Start-FullInstall {
     }
 
     # --- Anime4K пресет ---
+    $prev = Get-AnimePresetStatus
+    Write-Log ($(T PstLog) -f (Get-PresetStateText $prev))
     $Script:LblStatus.Text = $(T StPreset) -f $which
     $Script:Bar.Value = 80
     Install-AnimePreset -Which $which -BarMin 80 -BarMax 93
@@ -1427,6 +1497,8 @@ $Script:LblMpv    = $Script:Window.FindName('lblMpvStatus')
 $Script:LblDot    = $Script:Window.FindName('lblDotStatus')
 $Script:DotMpv    = $Script:Window.FindName('dotMpv')
 $Script:DotNet    = $Script:Window.FindName('dotNet')
+$Script:LblPreset = $Script:Window.FindName('lblPresetStatus')
+$Script:DotPreset = $Script:Window.FindName('dotPreset')
 $Script:RbLow     = $Script:Window.FindName('rbLow')
 $Script:RbHigh    = $Script:Window.FindName('rbHigh')
 $Script:BtnInstall = $Script:Window.FindName('btnInstall')
