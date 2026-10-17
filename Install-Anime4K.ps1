@@ -13,6 +13,8 @@
     поверхности; при недоступности backdrop — сплошной тёмный фон), два языка
     (RU/EN, сегменты в шапке), Quick Usage в главном окне,
     кнопка подробной инструкции открывает стилизованный гайд на текущем языке.
+    Все окна фиксированного размера (без ручного ресайза и разворота) и сами
+    подгоняются под рабочую область, чтобы не вылезти за экран.
 .PARAMETER Silent
   Тихая установка без UI: -Silent -Preset Low|High
 .PARAMETER Preset
@@ -539,7 +541,8 @@ $Script:MainXaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="mpv.net + Anime4K — Установщик" Height="900" Width="1100"
-        MinHeight="900" MinWidth="1100" WindowStartupLocation="CenterScreen"
+        MinHeight="600" MinWidth="820" WindowStartupLocation="CenterScreen"
+        ResizeMode="CanMinimize"
         Background="Transparent" Foreground="#E6E6E6" FontFamily="Segoe UI Variable, Segoe UI" FontSize="14">
   <Window.Resources>
     <!--@SCROLLBAR@-->
@@ -1000,7 +1003,8 @@ $Script:AdvancedXaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Подробная инструкция — Anime4K GLSL / MPV v4.x" Height="820" Width="960"
-        MinHeight="680" MinWidth="860" WindowStartupLocation="CenterScreen"
+        MinHeight="620" MinWidth="760" WindowStartupLocation="CenterScreen"
+        ResizeMode="CanMinimize"
         Background="Transparent" Foreground="#E6E6E6" FontFamily="Segoe UI Variable, Segoe UI" FontSize="13.5">
   <Window.Resources>
     <!--@SCROLLBAR@-->
@@ -1098,7 +1102,8 @@ $Script:AdvancedXamlEn = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Advanced Usage Instructions — Anime4K GLSL / MPV v4.x" Height="820" Width="960"
-        MinHeight="680" MinWidth="860" WindowStartupLocation="CenterScreen"
+        MinHeight="620" MinWidth="760" WindowStartupLocation="CenterScreen"
+        ResizeMode="CanMinimize"
         Background="Transparent" Foreground="#E6E6E6" FontFamily="Segoe UI Variable, Segoe UI" FontSize="13.5">
   <Window.Resources>
     <!--@SCROLLBAR@-->
@@ -1581,6 +1586,23 @@ function New-WpfWindow {
   return [Windows.Markup.XamlReader]::Load($reader)
 }
 
+# Окна фиксированные (ResizeMode=CanMinimize) — размер и разворот пользователю
+# недоступны, остаются только «Свернуть» и «Закрыть». Поэтому размер подгоняем
+# сами при старте: иначе на 1366x768 нижний край с кнопками уедет за пределы
+# экрана и до него не будет доступа. Содержимое окон лежит в ScrollViewer, так
+# что уменьшение безопасно — появляется прокрутка.
+# MinWidth/MinHeight в XAML — нижняя граница этой подгонки.
+function Resize-WindowToWorkArea {
+  param($Window)
+  $wa = [Windows.SystemParameters]::WorkArea
+  if ($Window.Width -gt ($wa.Width - 8)) {
+    $Window.Width = [Math]::Max($Window.MinWidth, $wa.Width - 8)
+  }
+  if ($Window.Height -gt ($wa.Height - 8)) {
+    $Window.Height = [Math]::Max($Window.MinHeight, $wa.Height - 8)
+  }
+}
+
 # ------------------------------------------------- Стилизованный диалог (замена MessageBox) ---
 # Вместо системного [Windows.MessageBox] (который на тёмном UI выглядит инородно)
 # показываем обычное WPF-окно в палитре приложения: Mica/тёмный заголовок,
@@ -1974,6 +1996,8 @@ function Update-StatusUI {
 function Show-AdvancedWindow {
   $x = if ($Script:Lang -eq 'EN') { $Script:AdvancedXamlEn } else { $Script:AdvancedXaml }
   $w = New-WpfWindow $x
+  # Окно фиксированное (NoResize) — ужимаем под рабочую область до показа
+  Resize-WindowToWorkArea $w
   try { $w.Owner = $Script:Window } catch {}
   # Как у главного окна: обработчик обращается к переменной скрипта. GetNewClosure()
   # использовать нельзя — он исполняет код в отдельном модуле, где не видны функции
@@ -2197,18 +2221,11 @@ if ([Threading.Thread]::CurrentThread.ApartmentState -ne 'STA') {
 }
 
 $Script:Window = New-WpfWindow $Script:MainXaml
-# Размер окна подобран так, чтобы весь контент (включая раскрытый лог) был виден
-# без прокрутки, поэтому MinHeight/MinWidth равны стартовым (900x1100) — меньше
-# этого окно не ужимается, иначе контент начинает обрезаться.
-# Кламп по рабочей области оставлен как страховка: он сработает, только если
-# Min* в XAML когда-нибудь опустят ниже размера рабочего стола.
-$wa = [Windows.SystemParameters]::WorkArea
-if ($Script:Window.Height -gt ($wa.Height - 8)) {
-  $Script:Window.Height = [Math]::Max($Script:Window.MinHeight, $wa.Height - 8)
-}
-if ($Script:Window.Width -gt ($wa.Width - 8)) {
-  $Script:Window.Width = [Math]::Max($Script:Window.MinWidth, $wa.Width - 8)
-}
+# Окно фиксированное (ResizeMode=CanMinimize): размер подобран так, чтобы весь
+# контент (включая раскрытый лог) был виден без прокрутки. Резизить вручную нельзя,
+# поэтому на маленьких экранах подгоняем размер под рабочую область — MinWidth/
+# MinHeight в XAML задают нижнюю границу, дальше контент уходит в прокрутку.
+Resize-WindowToWorkArea $Script:Window
 $Script:LblMpv    = $Script:Window.FindName('lblMpvStatus')
 $Script:LblDot    = $Script:Window.FindName('lblDotStatus')
 $Script:DotMpv    = $Script:Window.FindName('dotMpv')
