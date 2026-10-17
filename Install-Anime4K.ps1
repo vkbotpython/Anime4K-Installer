@@ -314,7 +314,7 @@ function Install-AnimePreset {
 $Script:MainXaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="mpv.net + Anime4K — Установщик" Height="880" Width="980"
+        Title="mpv.net + Anime4K — Установщик" Height="890" Width="1100"
         MinHeight="820" MinWidth="900" WindowStartupLocation="CenterScreen"
         Background="Transparent" Foreground="#E6E6E6" FontFamily="Segoe UI Variable, Segoe UI" FontSize="14">
   <Window.Resources>
@@ -1225,6 +1225,16 @@ if ([Threading.Thread]::CurrentThread.ApartmentState -ne 'STA') {
 }
 
 $Script:Window = New-WpfWindow $Script:MainXaml
+# Размер окна подобран так, чтобы весь контент (включая раскрытый лог) был виден
+# без прокрутки. На маленьких экранах не даём окну вылезти за рабочую область —
+# тогда остаётся обычное поведение со скроллом.
+$wa = [Windows.SystemParameters]::WorkArea
+if ($Script:Window.Height -gt ($wa.Height - 8)) {
+  $Script:Window.Height = [Math]::Max($Script:Window.MinHeight, $wa.Height - 8)
+}
+if ($Script:Window.Width -gt ($wa.Width - 8)) {
+  $Script:Window.Width = [Math]::Max($Script:Window.MinWidth, $wa.Width - 8)
+}
 $Script:LblMpv    = $Script:Window.FindName('lblMpvStatus')
 $Script:LblDot    = $Script:Window.FindName('lblDotStatus')
 $Script:DotMpv    = $Script:Window.FindName('dotMpv')
