@@ -45,6 +45,22 @@
 
 ## 🚀 Быстрый старт
 
+### ⚡ Установка одной командой (PowerShell)
+
+Откройте PowerShell и выполните одну строку:
+
+```powershell
+irm https://gitlab.com/avencores/anime4k-installer/-/raw/main/Install-Anime4K.ps1 -OutFile "$env:TEMP\Install-Anime4K.ps1"; powershell -NoProfile -ExecutionPolicy Bypass -STA -File "$env:TEMP\Install-Anime4K.ps1"
+```
+
+Команда скачивает установщик в `%TEMP%` и запускает его в STA-режиме (нужен для WPF). Если требуются права администратора, появится запрос UAC — согласитесь, и установщик перезапустится сам.
+
+Тихий режим одной командой (запускать из консоли с правами администратора):
+
+```powershell
+irm https://gitlab.com/avencores/anime4k-installer/-/raw/main/Install-Anime4K.ps1 -OutFile "$env:TEMP\Install-Anime4K.ps1"; powershell -NoProfile -ExecutionPolicy Bypass -File "$env:TEMP\Install-Anime4K.ps1" -Silent -Preset High
+```
+
 ### 🖱 Графический режим
 
 ```powershell
