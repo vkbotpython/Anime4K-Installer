@@ -48,18 +48,55 @@ $Script:Cfg = @{
 $Script:Lang = 'RU'
 # UI-хендлы объявляем заранее: в -Silent их нет, а StrictMode бросает на необъявленных переменных
 $Script:TxtLog = $null
+$Script:LogBrushes = @{}
 $Script:Bar = $null
 $Script:LblStatus = $null
 $Script:GuideWindow = $null
 
+# Кисти строк лога кэшируем: цвета берём из палитры окна, при отсутствии — фолбэк
+function Get-LogBrush {
+  param([string]$Key, [string]$Fallback)
+  if ($Script:LogBrushes[$Key]) { return $Script:LogBrushes[$Key] }
+  $b = $null
+  try { $b = $Script:Window.FindResource($Key) } catch {}
+  if ($b -isnot [Windows.Media.Brush]) {
+    $b = New-Object Windows.Media.SolidColorBrush ([Windows.Media.ColorConverter]::ConvertFromString($Fallback))
+  }
+  $Script:LogBrushes[$Key] = $b
+  return $b
+}
+
 function Write-Log {
   param([string]$Message, [string]$Level = 'INFO')
-  $line = '[{0}] [{1}] {2}' -f (Get-Date -Format 'HH:mm:ss'), $Level, $Message
+  $ts = Get-Date -Format 'HH:mm:ss'
+  $line = '[{0}] [{1}] {2}' -f $ts, $Level, $Message
   try { Add-Content -Path $Script:Cfg.LogFile -Value $line -Encoding UTF8 } catch {}
   if ($Script:TxtLog) {
     try {
       $Script:TxtLog.Dispatcher.Invoke([action]{
-        $Script:TxtLog.AppendText($line + "`r`n")
+        # Цветные фрагменты вместо плоской строки: время — тусклое, уровень — по важности
+        $tsBrush  = Get-LogBrush 'B_LogTs'   '#7C8494'
+        $msgBrush = Get-LogBrush 'B_LogText' '#D6D6D6'
+        switch ($Level) {
+          'OK'    { $lvlBrush = Get-LogBrush 'B_Success'  '#6CCB5F' }
+          'WARN'  { $lvlBrush = Get-LogBrush 'B_LogWarn'  '#FCE100' }
+          'ERROR' { $lvlBrush = Get-LogBrush 'B_LogError' '#FF99A4' }
+          default { $lvlBrush = Get-LogBrush 'B_LogInfo'  '#60CDFF' }
+        }
+        $p = New-Object System.Windows.Documents.Paragraph
+        $p.Margin = New-Object Windows.Thickness 0
+        $p.LineHeight = 18
+        $rTs = New-Object System.Windows.Documents.Run -ArgumentList ('[{0}] ' -f $ts)
+        $rTs.Foreground = $tsBrush
+        $rLv = New-Object System.Windows.Documents.Run -ArgumentList ('[{0}] ' -f $Level)
+        $rLv.Foreground = $lvlBrush
+        $rLv.FontWeight = [Windows.FontWeights]::SemiBold
+        $rMsg = New-Object System.Windows.Documents.Run -ArgumentList ([string]$Message)
+        $rMsg.Foreground = $msgBrush
+        $p.Inlines.Add($rTs)
+        $p.Inlines.Add($rLv)
+        $p.Inlines.Add($rMsg)
+        $Script:TxtLog.Document.Blocks.Add($p)
         $Script:TxtLog.ScrollToEnd()
       })
     } catch {}
@@ -342,6 +379,12 @@ $Script:MainXaml = @'
     <SolidColorBrush x:Key="B_SuccessBg" Color="#1A3320"/>
     <SolidColorBrush x:Key="B_WarningBg" Color="#3A3000"/>
     <SolidColorBrush x:Key="B_ErrorBg" Color="#3A1D20"/>
+    <!-- Консоль логов: фон и цвета уровней (строки красит Write-Log) -->
+    <SolidColorBrush x:Key="B_Console" Color="#E60E0E12"/>
+    <SolidColorBrush x:Key="B_LogTs" Color="#7C8494"/>
+    <SolidColorBrush x:Key="B_LogInfo" Color="#60CDFF"/>
+    <SolidColorBrush x:Key="B_LogWarn" Color="#FCE100"/>
+    <SolidColorBrush x:Key="B_LogError" Color="#FF99A4"/>
     <FontFamily x:Key="F_Mono">Cascadia Code, Consolas</FontFamily>
     <FontFamily x:Key="F_Icons">Segoe MDL2 Assets</FontFamily>
     <!-- Focus-ring: только рамка (AdornedElementPlaceholder здесь лишний) -->
@@ -496,15 +539,119 @@ $Script:MainXaml = @'
         </Setter.Value>
       </Setter>
     </Style>
-    <!-- Вариант A: TextBox оставляем (без смены логики Write-Log), монохром + префиксы -->
-    <Style x:Key="LogBox" TargetType="TextBox">
-      <Setter Property="Background" Value="{StaticResource B_Log}"/>
+    <!-- Окно логов: карточка с кастомной шапкой (иконка терминала + анимированный
+         шеврон) и тёмной консолью внутри. Строки красит Write-Log через RichTextBox. -->
+    <Style x:Key="LogExpander" TargetType="Expander">
+      <Setter Property="Foreground" Value="{StaticResource B_TextSec}"/>
+      <Setter Property="Margin" Value="0,10,0,0"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Expander">
+            <Border Background="{StaticResource B_Card}" BorderBrush="{StaticResource B_Border}"
+                    BorderThickness="1" CornerRadius="8">
+              <DockPanel>
+                <ToggleButton x:Name="HeaderSite" DockPanel.Dock="Top" Cursor="Hand"
+                              Content="{TemplateBinding Header}"
+                              Foreground="{TemplateBinding Foreground}"
+                              FocusVisualStyle="{StaticResource FocusRing}"
+                              IsChecked="{Binding IsExpanded, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}">
+                  <ToggleButton.Template>
+                    <ControlTemplate TargetType="ToggleButton">
+                      <Grid>
+                        <Border x:Name="hb" Background="Transparent" CornerRadius="6" Margin="4"/>
+                        <Grid Margin="14,9,12,9">
+                          <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                          </Grid.ColumnDefinitions>
+                          <TextBlock Text="&#xE756;" FontFamily="{StaticResource F_Icons}" FontSize="15"
+                                     Foreground="{StaticResource B_Accent}" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                          <ContentPresenter Grid.Column="1" Content="{TemplateBinding Content}" VerticalAlignment="Center"
+                                            TextElement.Foreground="{TemplateBinding Foreground}"
+                                            TextElement.FontWeight="SemiBold"/>
+                          <Path x:Name="chev" Grid.Column="2" Data="M 1 1 L 6 6 L 11 1" Stroke="{StaticResource B_TextSec}"
+                                StrokeThickness="1.7" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                VerticalAlignment="Center" Margin="12,0,2,0" RenderTransformOrigin="0.5,0.5">
+                            <Path.RenderTransform>
+                              <RotateTransform Angle="0"/>
+                            </Path.RenderTransform>
+                          </Path>
+                        </Grid>
+                      </Grid>
+                      <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                          <Setter TargetName="hb" Property="Background" Value="{StaticResource B_CardHover}"/>
+                          <Setter Property="Foreground" Value="{StaticResource B_TextPrimary}"/>
+                          <Setter TargetName="chev" Property="Stroke" Value="{StaticResource B_TextPrimary}"/>
+                        </Trigger>
+                        <Trigger Property="IsChecked" Value="True">
+                          <Setter TargetName="chev" Property="Stroke" Value="{StaticResource B_Accent}"/>
+                          <Trigger.EnterActions>
+                            <BeginStoryboard>
+                              <Storyboard>
+                                <DoubleAnimation Storyboard.TargetName="chev"
+                                                 Storyboard.TargetProperty="(UIElement.RenderTransform).(RotateTransform.Angle)"
+                                                 To="180" Duration="0:0:0.18">
+                                  <DoubleAnimation.EasingFunction>
+                                    <CubicEase EasingMode="EaseOut"/>
+                                  </DoubleAnimation.EasingFunction>
+                                </DoubleAnimation>
+                              </Storyboard>
+                            </BeginStoryboard>
+                          </Trigger.EnterActions>
+                          <Trigger.ExitActions>
+                            <BeginStoryboard>
+                              <Storyboard>
+                                <DoubleAnimation Storyboard.TargetName="chev"
+                                                 Storyboard.TargetProperty="(UIElement.RenderTransform).(RotateTransform.Angle)"
+                                                 To="0" Duration="0:0:0.18"/>
+                              </Storyboard>
+                            </BeginStoryboard>
+                          </Trigger.ExitActions>
+                        </Trigger>
+                      </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                  </ToggleButton.Template>
+                </ToggleButton>
+                <Border x:Name="Console" Visibility="Collapsed" Background="{StaticResource B_Console}"
+                        BorderBrush="{StaticResource B_Border}" BorderThickness="0,1,0,0"
+                        CornerRadius="0,0,7,7" Padding="12,10,8,10">
+                  <ContentPresenter/>
+                </Border>
+              </DockPanel>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsExpanded" Value="True">
+                <Setter TargetName="Console" Property="Visibility" Value="Visible"/>
+                <Trigger.EnterActions>
+                  <BeginStoryboard>
+                    <Storyboard>
+                      <DoubleAnimation Storyboard.TargetName="Console" Storyboard.TargetProperty="Opacity"
+                                       From="0" To="1" Duration="0:0:0.15"/>
+                    </Storyboard>
+                  </BeginStoryboard>
+                </Trigger.EnterActions>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+    <!-- Консоль: прозрачный фон (его даёт Border шаблона), моноширинный шрифт -->
+    <Style x:Key="LogConsole" TargetType="RichTextBox">
+      <Setter Property="Background" Value="Transparent"/>
       <Setter Property="Foreground" Value="{StaticResource B_LogText}"/>
       <Setter Property="FontFamily" Value="{StaticResource F_Mono}"/>
       <Setter Property="FontSize" Value="12"/>
-      <Setter Property="BorderBrush" Value="{StaticResource B_Border}"/>
-      <Setter Property="BorderThickness" Value="1"/>
-      <Setter Property="Padding" Value="10"/>
+      <Setter Property="BorderThickness" Value="0"/>
+      <Setter Property="Padding" Value="0"/>
+      <Setter Property="IsReadOnly" Value="True"/>
+      <Setter Property="IsReadOnlyCaretVisible" Value="False"/>
+      <Setter Property="IsUndoEnabled" Value="False"/>
+      <Setter Property="VerticalScrollBarVisibility" Value="Auto"/>
+      <Setter Property="HorizontalScrollBarVisibility" Value="Disabled"/>
+      <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
     </Style>
   </Window.Resources>
   <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="20">
@@ -575,10 +722,51 @@ $Script:MainXaml = @'
       <Button x:Name="btnInstall" Style="{StaticResource PrimaryButton}" Content="Установить / Обновить всё" Height="46"/>
       <ProgressBar x:Name="progressBar" Style="{StaticResource FluentProgress}" Margin="0,10,0,6" Minimum="0" Maximum="100" Value="0"/>
       <TextBlock x:Name="txtStatus" Style="{StaticResource Muted}" Text="Готов. Выберите пресет и нажмите «Установить»."/>
-      <Expander x:Name="expLog" Header="Логи" Foreground="#C7C7C7" Margin="0,8,0,0" IsExpanded="False">
-        <TextBox x:Name="txtLog" Style="{StaticResource LogBox}" Height="130" IsReadOnly="True"
-                 VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
-                 TextWrapping="NoWrap" AcceptsReturn="True"/>
+      <Expander x:Name="expLog" Style="{StaticResource LogExpander}" Header="Логи" IsExpanded="False">
+        <RichTextBox x:Name="txtLog" Height="124" Style="{StaticResource LogConsole}">
+          <RichTextBox.Resources>
+            <!-- Тонкий тёмный скроллбар только у консоли (вертикальный) -->
+            <Style TargetType="ScrollBar">
+              <Setter Property="Width" Value="12"/>
+              <Setter Property="Background" Value="Transparent"/>
+              <Setter Property="Focusable" Value="False"/>
+              <Setter Property="Template">
+                <Setter.Value>
+                  <ControlTemplate TargetType="ScrollBar">
+                    <Grid Background="{TemplateBinding Background}">
+                      <Track x:Name="PART_Track" IsDirectionReversed="True">
+                        <Track.DecreaseRepeatButton>
+                          <RepeatButton Command="ScrollBar.PageUpCommand" Focusable="False" Opacity="0"/>
+                        </Track.DecreaseRepeatButton>
+                        <Track.Thumb>
+                          <Thumb MinHeight="28">
+                            <Thumb.Template>
+                              <ControlTemplate TargetType="Thumb">
+                                <Border x:Name="tb" Background="#3DFFFFFF" CornerRadius="3" Margin="3,2"/>
+                                <ControlTemplate.Triggers>
+                                  <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter TargetName="tb" Property="Background" Value="#66FFFFFF"/>
+                                  </Trigger>
+                                  <Trigger Property="IsDragging" Value="True">
+                                    <Setter TargetName="tb" Property="Background" Value="#80FFFFFF"/>
+                                  </Trigger>
+                                </ControlTemplate.Triggers>
+                              </ControlTemplate>
+                            </Thumb.Template>
+                          </Thumb>
+                        </Track.Thumb>
+                        <Track.IncreaseRepeatButton>
+                          <RepeatButton Command="ScrollBar.PageDownCommand" Focusable="False" Opacity="0"/>
+                        </Track.IncreaseRepeatButton>
+                      </Track>
+                    </Grid>
+                  </ControlTemplate>
+                </Setter.Value>
+              </Setter>
+            </Style>
+          </RichTextBox.Resources>
+          <FlowDocument PagePadding="0" LineHeight="18"/>
+        </RichTextBox>
       </Expander>
 
       <!-- Quick Usage -->
