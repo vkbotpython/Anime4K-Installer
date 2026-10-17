@@ -72,6 +72,11 @@ $Script:LblPreset = $null
 $Script:DotPreset = $null
 $Script:GuideWindow = $null
 $Script:AboutWindow = $null
+# Стилизованный диалог (замена MessageBox): окно, результат, путь для «чипа» и таймер копирования
+$Script:DlgWindow = $null
+$Script:DlgResult = $null
+$Script:DlgPath = ''
+$Script:DlgCopyTimer = $null
 # Тост-таймер окна «О программе» (переключает «Спасибо…» / «✓ Номер скопирован»)
 $Script:AboutCopyTimer = $null
 # Тост-таймер кнопки «Проверить снова» (возвращает подпись после «✓ Обновлено»)
@@ -1345,10 +1350,18 @@ $Script:T = @{
     StDone      = 'Готово. Пресет {0} в {1}. Ctrl+1/2/3 — режимы, Ctrl+4/5/6 — усиленные, Ctrl+0 — выкл.'
     DlProgress  = 'Скачивание…'
     DoneTitle   = 'Anime4K установлен'
-    DoneMsg     = "Готово!`n`nmpv.net установлен системно, .NET 10.0.13 проверен,`nпресет Anime4K ({0}) распакован в:`n{1}`n`nПорядок шейдеров — из mpv.conf архива.`nCtrl+1/2/3 — режимы A/B/C, Ctrl+4/5/6 — усиленные, Ctrl+0 — выключить."
+    DoneHead    = 'Готово!'
+    DoneMsg     = "mpv.net установлен системно, .NET 10.0.13 проверен.`nПресет Anime4K ({0}) распакован в папку:"
+    DoneHint    = "Порядок шейдеров — из mpv.conf архива.`nCtrl+1/2/3 — режимы A/B/C, Ctrl+4/5/6 — усиленные, Ctrl+0 — выключить."
+    DlgOk       = 'Хорошо'
+    BtnYes      = 'Да'
+    BtnNo       = 'Нет'
+    CopyTip     = 'Скопировать путь в буфер обмена'
+    CopiedTip   = 'Скопировано'
     ErrTitle    = 'Ошибка'
+    ErrLogLabel = 'Подробности сохранены в файле:'
     ErrStatus   = 'Ошибка: {0}'
-    ErrMsg      = "Ошибка установки:`n{0}`n`nПодробности: {1}"
+    ErrMsg      = "Ошибка установки:`n{0}"
     StartLog    = '--- Старт установки ---'
     DoneLog     = '--- Установка завершена успешно ---'
     MpvHas      = 'mpv.net уже установлен: {0} @ {1}'
@@ -1420,10 +1433,18 @@ $Script:T = @{
     StDone      = 'Done. Preset {0} in {1}. Ctrl+1/2/3 — modes, Ctrl+4/5/6 — boost, Ctrl+0 — off.'
     DlProgress  = 'Downloading…'
     DoneTitle   = 'Anime4K installed'
-    DoneMsg     = "Done!`n`nmpv.net installed system-wide, .NET 10.0.13 checked,`nAnime4K preset ({0}) extracted to:`n{1}`n`nShader order — from the archive mpv.conf.`nCtrl+1/2/3 — modes A/B/C, Ctrl+4/5/6 — boost, Ctrl+0 — off."
+    DoneHead    = 'Done!'
+    DoneMsg     = "mpv.net installed system-wide, .NET 10.0.13 checked.`nAnime4K preset ({0}) extracted to:"
+    DoneHint    = "Shader order — from the archive mpv.conf.`nCtrl+1/2/3 — modes A/B/C, Ctrl+4/5/6 — boost, Ctrl+0 — off."
+    DlgOk       = 'OK'
+    BtnYes      = 'Yes'
+    BtnNo       = 'No'
+    CopyTip     = 'Copy path to clipboard'
+    CopiedTip   = 'Copied'
     ErrTitle    = 'Error'
+    ErrLogLabel = 'Details are saved to:'
     ErrStatus   = 'Error: {0}'
-    ErrMsg      = "Install failed:`n{0}`n`nDetails: {1}"
+    ErrMsg      = "Install failed:`n{0}"
     StartLog    = '--- Install started ---'
     DoneLog     = '--- Install finished successfully ---'
     MpvHas      = 'mpv.net already installed: {0} @ {1}'
@@ -1494,6 +1515,248 @@ function New-WpfWindow {
   $xml = [xml]$Xaml
   $reader = New-Object Xml.XmlNodeReader $xml
   return [Windows.Markup.XamlReader]::Load($reader)
+}
+
+# ------------------------------------------------- Стилизованный диалог (замена MessageBox) ---
+# Вместо системного [Windows.MessageBox] (который на тёмном UI выглядит инородно)
+# показываем обычное WPF-окно в палитре приложения: Mica/тёмный заголовок,
+# карточка с alpha-фоном, accent-кнопки и иконка по типу сообщения.
+# Kind = Info|Success|Warning|Error задаёт глиф и цвет; Path рисует «чип» с путём
+# (моноширинно) и кнопкой копирования; Hint — приглушённый текст под чипом.
+# Возвращает 'Primary' (основная кнопка) или 'Secondary' (вторая/закрытие).
+function Show-StyledDialog {
+  param(
+    [Parameter(Mandatory)][string]$Title,
+    [Parameter(Mandatory)][string]$Heading,
+    [Parameter(Mandatory)][string]$PrimaryText,
+    [string]$Message = '',
+    [ValidateSet('Info','Success','Warning','Error')][string]$Kind = 'Info',
+    [string]$Path = '',
+    [string]$PathLabel = '',
+    [string]$Hint = '',
+    [string]$SecondaryText = ''
+  )
+  # Глиф — Segoe MDL2 Assets (как иконки в главном окне); Fg/Bg — цвет значка и круга
+  $k = @{
+    Info    = @{ G = [char]0xE946; Fg = '#60CDFF'; Bg = '#2660CDFF' }
+    Success = @{ G = [char]0xE73E; Fg = '#6CCB5F'; Bg = '#266CCB5F' }
+    Warning = @{ G = [char]0xE7BA; Fg = '#FCE100'; Bg = '#26FCE100' }
+    Error   = @{ G = [char]0xE783; Fg = '#FF99A4'; Bg = '#26FF99A4' }
+  }[$Kind]
+
+  # __FG__/__BG__ подставляем строкой: Color->Brush через StaticResource в XAML падает
+  $xaml = @'
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="" Width="540" SizeToContent="Height"
+        WindowStartupLocation="CenterOwner" ResizeMode="NoResize" ShowInTaskbar="False"
+        Background="Transparent" Foreground="#E6E6E6" FontFamily="Segoe UI Variable, Segoe UI"
+        FontSize="14" SnapsToDevicePixels="True" UseLayoutRounding="True">
+  <Window.Resources>
+    <!--@SCROLLBAR@-->
+    <SolidColorBrush x:Key="B_Card" Color="#A62B2B2B"/>
+    <SolidColorBrush x:Key="B_CardHover" Color="#C0323232"/>
+    <SolidColorBrush x:Key="B_Subtle" Color="#A62D2D2D"/>
+    <SolidColorBrush x:Key="B_Pressed" Color="#E0262626"/>
+    <SolidColorBrush x:Key="B_Border" Color="#59333333"/>
+    <SolidColorBrush x:Key="B_BorderStrong" Color="#73454545"/>
+    <SolidColorBrush x:Key="B_Accent" Color="#60CDFF"/>
+    <SolidColorBrush x:Key="B_AccentHover" Color="#70D3FF"/>
+    <SolidColorBrush x:Key="B_AccentPressed" Color="#40B0E0"/>
+    <SolidColorBrush x:Key="B_OnAccent" Color="#000000"/>
+    <SolidColorBrush x:Key="B_TextPrimary" Color="#FFFFFF"/>
+    <SolidColorBrush x:Key="B_TextSec" Color="#C7C7C7"/>
+    <Style x:Key="FocusRing">
+      <Setter Property="Control.Template">
+        <Setter.Value>
+          <ControlTemplate>
+            <Rectangle Margin="-3" RadiusX="5" RadiusY="5" StrokeThickness="2"
+                       Stroke="{StaticResource B_Accent}" SnapsToDevicePixels="True"/>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+    <ControlTemplate x:Key="TplButton" TargetType="Button">
+      <Border x:Name="b" Background="{TemplateBinding Background}"
+              BorderBrush="{TemplateBinding BorderBrush}"
+              BorderThickness="{TemplateBinding BorderThickness}"
+              CornerRadius="4" Padding="{TemplateBinding Padding}">
+        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+      </Border>
+      <ControlTemplate.Triggers>
+        <Trigger Property="IsMouseOver" Value="True">
+          <Setter TargetName="b" Property="Background" Value="{StaticResource B_CardHover}"/>
+        </Trigger>
+        <Trigger Property="IsPressed" Value="True">
+          <Setter TargetName="b" Property="Background" Value="{StaticResource B_Pressed}"/>
+        </Trigger>
+        <Trigger Property="IsEnabled" Value="False">
+          <Setter TargetName="b" Property="Opacity" Value="0.45"/>
+        </Trigger>
+      </ControlTemplate.Triggers>
+    </ControlTemplate>
+    <ControlTemplate x:Key="TplPrimary" TargetType="Button">
+      <Border x:Name="b" Background="{TemplateBinding Background}"
+              CornerRadius="4" Padding="{TemplateBinding Padding}">
+        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+      </Border>
+      <ControlTemplate.Triggers>
+        <Trigger Property="IsMouseOver" Value="True">
+          <Setter TargetName="b" Property="Background" Value="{StaticResource B_AccentHover}"/>
+        </Trigger>
+        <Trigger Property="IsPressed" Value="True">
+          <Setter TargetName="b" Property="Background" Value="{StaticResource B_AccentPressed}"/>
+        </Trigger>
+        <Trigger Property="IsEnabled" Value="False">
+          <Setter TargetName="b" Property="Opacity" Value="0.45"/>
+        </Trigger>
+      </ControlTemplate.Triggers>
+    </ControlTemplate>
+    <Style TargetType="Button">
+      <Setter Property="MinHeight" Value="34"/>
+      <Setter Property="Padding" Value="14,7"/>
+      <Setter Property="Background" Value="{StaticResource B_Subtle}"/>
+      <Setter Property="Foreground" Value="{StaticResource B_TextPrimary}"/>
+      <Setter Property="BorderBrush" Value="{StaticResource B_BorderStrong}"/>
+      <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="FocusVisualStyle" Value="{StaticResource FocusRing}"/>
+      <Setter Property="Template" Value="{StaticResource TplButton}"/>
+    </Style>
+    <Style x:Key="PrimaryButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+      <Setter Property="Template" Value="{StaticResource TplPrimary}"/>
+      <Setter Property="Background" Value="{StaticResource B_Accent}"/>
+      <Setter Property="Foreground" Value="{StaticResource B_OnAccent}"/>
+      <Setter Property="FontWeight" Value="SemiBold"/>
+      <Setter Property="BorderThickness" Value="0"/>
+    </Style>
+  </Window.Resources>
+  <Border Background="{StaticResource B_Card}" BorderBrush="{StaticResource B_Border}"
+          BorderThickness="1" CornerRadius="10" Margin="12" Padding="22">
+    <StackPanel>
+      <Grid>
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="Auto"/>
+          <ColumnDefinition Width="*"/>
+        </Grid.ColumnDefinitions>
+        <Border Width="42" Height="42" CornerRadius="21" Background="__BG__" VerticalAlignment="Top">
+          <TextBlock x:Name="dlgIcon" FontFamily="Segoe MDL2 Assets" FontSize="19"
+                     Foreground="__FG__" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+        </Border>
+        <TextBlock x:Name="dlgHeading" Grid.Column="1" Margin="14,0,0,0" VerticalAlignment="Center"
+                   FontSize="18" FontWeight="SemiBold" Foreground="{StaticResource B_TextPrimary}"
+                   TextWrapping="Wrap"/>
+      </Grid>
+      <ScrollViewer x:Name="dlgMsgScroll" MaxHeight="320" Margin="0,16,0,0" Padding="0"
+                    VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                    Focusable="False">
+        <TextBlock x:Name="dlgMessage" TextWrapping="Wrap" Foreground="{StaticResource B_TextSec}"
+                   FontSize="13.5" LineHeight="20"/>
+      </ScrollViewer>
+      <StackPanel x:Name="dlgPathPanel" Margin="0,16,0,0" Visibility="Collapsed">
+        <TextBlock x:Name="dlgPathLabel" Foreground="{StaticResource B_TextSec}" FontSize="12.5"
+                   Margin="0,0,0,7" TextWrapping="Wrap"/>
+        <Border Background="#8C1B1B1B" BorderBrush="#33FFFFFF" BorderThickness="1"
+                CornerRadius="6" Padding="12,7">
+          <Grid>
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="*"/>
+              <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <TextBlock x:Name="dlgPath" FontFamily="Cascadia Code, Consolas" FontSize="12.5"
+                       Foreground="{StaticResource B_TextPrimary}" TextWrapping="Wrap"
+                       VerticalAlignment="Center"/>
+            <Button x:Name="dlgCopy" Grid.Column="1" Margin="10,0,0,0" Padding="10,5" MinHeight="28"
+                    MinWidth="0" VerticalAlignment="Center" Content="&#x1F4CB;"/>
+          </Grid>
+        </Border>
+      </StackPanel>
+      <TextBlock x:Name="dlgHint" Margin="0,14,0,0" Visibility="Collapsed" TextWrapping="Wrap"
+                 Foreground="{StaticResource B_TextSec}" FontSize="12.5" LineHeight="19"/>
+      <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,22,0,0">
+        <Button x:Name="dlgSecondary" Visibility="Collapsed" Margin="0" MinWidth="112"/>
+        <Button x:Name="dlgPrimary" Style="{StaticResource PrimaryButton}" Margin="8,0,0,0" MinWidth="124"/>
+      </StackPanel>
+    </StackPanel>
+  </Border>
+</Window>
+'@
+
+  $xaml = $xaml.Replace('__FG__', $k.Fg).Replace('__BG__', $k.Bg)
+  $w = New-WpfWindow $xaml
+  try { $w.Owner = $Script:Window } catch {}
+  $w.Title = $Title
+  $w.FindName('dlgIcon').Text    = [string]$k.G
+  $w.FindName('dlgHeading').Text = $Heading
+
+  if ([string]::IsNullOrWhiteSpace($Message)) {
+    $w.FindName('dlgMsgScroll').Visibility = 'Collapsed'
+  } else {
+    $w.FindName('dlgMessage').Text = $Message
+  }
+
+  if ($Path) {
+    $w.FindName('dlgPathPanel').Visibility = 'Visible'
+    $w.FindName('dlgPath').Text = $Path
+    if ($PathLabel) { $w.FindName('dlgPathLabel').Text = $PathLabel }
+    else { $w.FindName('dlgPathLabel').Visibility = 'Collapsed' }
+    $w.FindName('dlgCopy').ToolTip = T CopyTip
+  }
+
+  if ($Hint) {
+    $w.FindName('dlgHint').Visibility = 'Visible'
+    $w.FindName('dlgHint').Text = $Hint
+  }
+
+  $prim = $w.FindName('dlgPrimary')
+  $prim.Content = $PrimaryText
+  $prim.IsDefault = $true
+  $sec = $w.FindName('dlgSecondary')
+  if ($SecondaryText) {
+    $sec.Content = $SecondaryText
+    $sec.Visibility = 'Visible'
+    $sec.IsCancel = $true
+  }
+
+  # Как и в остальных окнах: обработчики работают через $Script: (GetNewClosure здесь
+  # не годится — он исполняет код в отдельном модуле, где не видны функции скрипта).
+  $Script:DlgWindow = $w
+  $Script:DlgResult = $null
+  $Script:DlgPath   = $Path
+  $prim.Add_Click({ $Script:DlgResult = 'Primary';   $Script:DlgWindow.DialogResult = $true })
+  $sec.Add_Click({  $Script:DlgResult = 'Secondary'; $Script:DlgWindow.DialogResult = $false })
+
+  if ($Path) {
+    $w.FindName('dlgCopy').Add_Click({
+      try {
+        Set-Clipboard -Value $Script:DlgPath
+        $c = $Script:DlgWindow.FindName('dlgCopy')
+        $c.Content = '✓'
+        $c.ToolTip = T CopiedTip
+        if ($Script:DlgCopyTimer) { try { $Script:DlgCopyTimer.Stop() } catch {} }
+        $t = New-Object System.Windows.Threading.DispatcherTimer
+        $t.Interval = [TimeSpan]::FromSeconds(1.6)
+        $t.Add_Tick({
+          $Script:DlgCopyTimer.Stop()
+          $c2 = $Script:DlgWindow.FindName('dlgCopy')
+          if ($c2) { $c2.Content = [char]0x1F4CB; $c2.ToolTip = T CopyTip }
+        })
+        $Script:DlgCopyTimer = $t
+        $t.Start()
+      } catch {}
+    })
+  }
+
+  # Esc закрывает; если второй кнопки нет — это то же, что основное действие
+  $w.Add_KeyDown({
+    if ($args[1].Key -eq [Windows.Input.Key]::Escape) { $Script:DlgWindow.Close() }
+  })
+  $w.Add_SourceInitialized({ [void](Enable-FluentChrome $Script:DlgWindow) })
+  $w.ShowDialog() | Out-Null
+
+  $r = $Script:DlgResult
+  if (-not $r) { if ($SecondaryText) { return 'Secondary' } else { return 'Primary' } }
+  return $r
 }
 
 # ------------------------------------------------- Fluent chrome (dark titlebar + Mica) ---
@@ -1716,16 +1979,19 @@ function Start-FullInstall {
       if ($Elevated) {
         Write-Log $(T AdminLog) 'WARN'
         $Script:LblStatus.Text = T AdminStatus
-        [Windows.MessageBox]::Show($(T AdminStatus), $(T AdminTitle), 'OK', 'Warning') | Out-Null
+        [void](Show-StyledDialog -Title (T AdminTitle) -Heading (T AdminTitle) `
+          -Message (T AdminStatus) -Kind Warning -PrimaryText (T DlgOk))
         return
       }
-      $r = [Windows.MessageBox]::Show($(T AdminMsg), $(T AdminTitle), 'YesNo', 'Warning')
-      if ($r -eq 'Yes') {
+      $r = Show-StyledDialog -Title (T AdminTitle) -Heading (T AdminTitle) `
+        -Message (T AdminMsg) -Kind Warning -PrimaryText (T BtnYes) -SecondaryText (T BtnNo)
+      if ($r -eq 'Primary') {
         # Запуск вида irm ... | iex: файла на диске нет, перезапускать нечего
         if (-not (Get-SelfPath)) {
           Write-Log $(T NoSelfPath) 'ERROR'
           $Script:LblStatus.Text = T AdminStatus
-          [Windows.MessageBox]::Show($(T NoSelfPath), $(T AdminTitle), 'OK', 'Error') | Out-Null
+          [void](Show-StyledDialog -Title (T AdminTitle) -Heading (T AdminTitle) `
+            -Message (T NoSelfPath) -Kind Error -PrimaryText (T DlgOk))
           return
         }
         try {
@@ -1805,8 +2071,9 @@ function Start-FullInstall {
     try { $Script:Bar.Foreground = $Script:Window.FindResource('B_Success') } catch {}
     $Script:LblStatus.Text = $(T StDone) -f $which, $Script:Cfg.ConfigDir
     Write-Log $(T DoneLog)
-    [Windows.MessageBox]::Show(($(T DoneMsg) -f $which, $Script:Cfg.ConfigDir),
-      $(T DoneTitle), 'OK', 'Information') | Out-Null
+    [void](Show-StyledDialog -Title (T DoneTitle) -Heading (T DoneHead) -Kind Success `
+      -Message ((T DoneMsg) -f $which) -Path $Script:Cfg.ConfigDir -Hint (T DoneHint) `
+      -PrimaryText (T DlgOk))
   } catch {
     $msg = $_.Exception.Message
     Write-Log $msg 'ERROR'
@@ -1814,8 +2081,9 @@ function Start-FullInstall {
     $Script:LblStatus.Text = $(T ErrStatus) -f $msg
     $Script:Bar.IsIndeterminate = $false
     try { $Script:Bar.Foreground = $Script:Window.FindResource('B_Error') } catch {}
-    [Windows.MessageBox]::Show(($(T ErrMsg) -f $msg, $Script:Cfg.LogFile),
-      $(T ErrTitle), 'OK', 'Error') | Out-Null
+    [void](Show-StyledDialog -Title (T ErrTitle) -Heading (T ErrTitle) -Kind Error `
+      -Message ((T ErrMsg) -f $msg) -PathLabel (T ErrLogLabel) -Path $Script:Cfg.LogFile `
+      -PrimaryText (T DlgOk))
   } finally {
     $Script:Bar.IsIndeterminate = $false
     # при перезапуске кнопку не возвращаем: окно уже закрывается
