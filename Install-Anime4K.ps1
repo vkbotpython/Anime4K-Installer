@@ -38,6 +38,7 @@ $Script:Cfg = @{
   MpvApiLatest     = 'https://api.github.com/repos/mpvnet-player/mpv.net/releases/latest'
   DotnetUrl        = 'https://builds.dotnet.microsoft.com/dotnet/WindowsDesktop/10.0.13/windowsdesktop-runtime-10.0.13-win-x64.exe'
   DotnetVersion    = '10.0.13'
+  DotnetRegPath    = 'HKLM:\SOFTWARE\dotnet\Setup\InstalledVersions\x64\sharedfx\Microsoft.WindowsDesktop.App'
   AnimeTag         = 'v4.0.1'
   AnimeLowUrl      = 'https://github.com/Tama47/Anime4K/releases/download/v4.0.1/GLSL_Windows_Low-end.zip'
   AnimeHighUrl     = 'https://github.com/Tama47/Anime4K/releases/download/v4.0.1/GLSL_Windows_High-end.zip'
@@ -142,10 +143,13 @@ function Get-DotnetStatus {
     $hit = Get-Item $dir -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($hit) { $res.Installed = $true; $res.Detail = $hit.FullName; return $res }
   } catch {}
-  # 3) реестр dotnet
+  # 3) реестр dotnet: имена значений — установленные версии, их данные — пути к рантайму
   try {
-    $r = Get-ItemProperty 'HKLM:\SOFTWARE\dotnet\Setup\InstalledVersions\x64\sharedfx\Microsoft.WindowsDesktop.App' -ErrorAction SilentlyContinue
-    if ($r -and $r.Version -like "$want*") { $res.Installed = $true; $res.Detail = $r.Version; return $res }
+    $r = Get-ItemProperty $Script:Cfg.DotnetRegPath -ErrorAction SilentlyContinue
+    if ($r) {
+      $hit = $r.PSObject.Properties.Name | Where-Object { $_ -like "$want*" } | Select-Object -First 1
+      if ($hit) { $res.Installed = $true; $res.Detail = "Microsoft.WindowsDesktop.App $hit (registry)"; return $res }
+    }
   } catch {}
   return $res
 }
@@ -156,7 +160,11 @@ function Invoke-DownloadFile {
     [Parameter(Mandatory)][string]$Url,
     [Parameter(Mandatory)][string]$Dest,
     $Bar = $null,       # System.Windows.Controls.ProgressBar
-    $StatusLabel = $null
+    $StatusLabel = $null,
+    # Сегмент общего прогресса: 0..100% этой загрузки проецируются в [BarMin..BarMax],
+    # чтобы полоса не откатывалась назад при переходе к следующему этапу
+    [int]$BarMin = 0,
+    [int]$BarMax = 100
   )
   $dir = Split-Path $Dest -Parent
   if (-not (Test-Path $dir)) { New-Item $dir -ItemType Directory -Force | Out-Null }
@@ -182,7 +190,8 @@ function Invoke-DownloadFile {
           $pct = [int](($got * 100) / $total)
           if ($pct -ne $last) {
             $last = $pct
-            $Bar.Dispatcher.Invoke([action]{ $Bar.Value = $pct })
+            $barVal = $BarMin + [int](($pct * ($BarMax - $BarMin)) / 100)
+            $Bar.Dispatcher.Invoke([action]{ $Bar.Value = $barVal })
             if ($StatusLabel) {
               $mb = '{0:N1} / {1:N1} MB ({2}%)' -f ($got/1MB), ($total/1MB), $pct
               $prefix = $(T DlProgress)
@@ -249,7 +258,11 @@ function Install-DotnetRuntime {
 }
 
 function Install-AnimePreset {
-  param([ValidateSet('Low','High')][string]$Which)
+  param(
+    [ValidateSet('Low','High')][string]$Which,
+    [int]$BarMin = 0,
+    [int]$BarMax = 100
+  )
   $dest = $Script:Cfg.ConfigDir
   if (-not (Test-Path $dest)) { New-Item $dest -ItemType Directory -Force | Out-Null }
   # shaders подпапка (архивы Tama47 уже содержат shaders/, но гарантируем наличие)
@@ -259,7 +272,7 @@ function Install-AnimePreset {
   $url = if ($Which -eq 'Low') { $Script:Cfg.AnimeLowUrl } else { $Script:Cfg.AnimeHighUrl }
   $zip = Join-Path $env:TEMP ("Anime4K_" + $Which + ".zip")
   if ($Script:Bar -and $Script:LblStatus) {
-    Invoke-DownloadFile -Url $url -Dest $zip -Bar $Script:Bar -StatusLabel $Script:LblStatus
+    Invoke-DownloadFile -Url $url -Dest $zip -Bar $Script:Bar -StatusLabel $Script:LblStatus -BarMin $BarMin -BarMax $BarMax
   } else {
     # silent: без UI
     Write-Log "Скачивание пресета ${Which}: $url"
@@ -271,6 +284,12 @@ function Install-AnimePreset {
   try {
     Write-Log "Распаковка $zip -> $tmp (перезапись молча)"
     Expand-Archive -Path $zip -DestinationPath $tmp -Force
+    # macOS-метаданные из архивов Tama47 mpv не нужны — вычищаем (__MACOSX, ._*, .DS_Store)
+    $macDir = Join-Path $tmp '__MACOSX'
+    if (Test-Path $macDir) { Remove-Item $macDir -Recurse -Force -ErrorAction SilentlyContinue }
+    Get-ChildItem $tmp -Force -Recurse -File -ErrorAction SilentlyContinue |
+      Where-Object { $_.Name -like '._*' -or $_.Name -eq '.DS_Store' } |
+      Remove-Item -Force -ErrorAction SilentlyContinue
     # Архивы могут лежать либо плоско (mpv.conf в корне),
     # либо в одной вложенной папке — ищем реальный корень по mpv.conf
     $source = $tmp
@@ -569,6 +588,7 @@ $Script:MainXaml = @'
           <TextBlock Margin="0,6,0,0" TextWrapping="Wrap"><Run Foreground="#60CDFF" FontWeight="Bold" Text="Ctrl+1"/> — <Run x:Name="runModeA" Text="Mode A (оптимально для 1080p)"/></TextBlock>
           <TextBlock TextWrapping="Wrap"><Run Foreground="#60CDFF" FontWeight="Bold" Text="Ctrl+2"/> — <Run x:Name="runModeB" Text="Mode B (оптимально для 720p)"/></TextBlock>
           <TextBlock TextWrapping="Wrap"><Run Foreground="#60CDFF" FontWeight="Bold" Text="Ctrl+3"/> — <Run x:Name="runModeC" Text="Mode C (оптимально для 480p)"/></TextBlock>
+          <TextBlock TextWrapping="Wrap"><Run Foreground="#9ECE6A" FontWeight="Bold" Text="Ctrl+4/5/6"/> — <Run x:Name="runBoost" Text="усиленные (двойной проход: A+A / B+B / C+A)"/></TextBlock>
           <TextBlock TextWrapping="Wrap"><Run Foreground="#FF99A4" FontWeight="Bold" Text="Ctrl+0"/> — <Run x:Name="runModeOff" Text="сбросить шейдеры (выключить Anime4K)"/></TextBlock>
         </StackPanel>
       </Border>
@@ -801,6 +821,7 @@ $Script:T = @{
     ModeB       = 'Mode B (оптимально для 720p)'
     ModeC       = 'Mode C (оптимально для 480p)'
     ModeOff     = 'сбросить шейдеры (выключить Anime4K)'
+    ModeBoost   = 'усиленные (двойной проход: A+A / B+B / C+A)'
     AdvBtn      = '📖 Подробная инструкция'
     OpenCfg     = '📁 Открыть папку конфига'
     Footer      = 'Источники: github.com/mpvnet-player/mpv.net • builds.dotnet.microsoft.com • github.com/Tama47/Anime4K (v4.0.1) • github.com/bloc97/Anime4K (доки). Конфиги: %APPDATA%\mpv.net'
@@ -814,10 +835,10 @@ $Script:T = @{
     StDlNet     = 'Скачивание .NET Desktop Runtime 10.0.13…'
     StInstNet   = 'Установка .NET Runtime (тихо)…'
     StPreset    = 'Установка пресета Anime4K ({0}) в %APPDATA%\mpv.net…'
-    StDone      = 'Готово. Пресет {0} в {1}. Ctrl+1/2/3 — режимы, Ctrl+0 — выкл.'
+    StDone      = 'Готово. Пресет {0} в {1}. Ctrl+1/2/3 — режимы, Ctrl+4/5/6 — усиленные, Ctrl+0 — выкл.'
     DlProgress  = 'Скачивание…'
     DoneTitle   = 'Anime4K установлен'
-    DoneMsg     = "Готово!`n`nmpv.net установлен системно, .NET 10.0.13 проверен,`nпресет Anime4K ({0}) распакован в:`n{1}`n`nПорядок шейдеров — из mpv.conf архива.`nCtrl+1/2/3 — режимы A/B/C, Ctrl+0 — выключить."
+    DoneMsg     = "Готово!`n`nmpv.net установлен системно, .NET 10.0.13 проверен,`nпресет Anime4K ({0}) распакован в:`n{1}`n`nПорядок шейдеров — из mpv.conf архива.`nCtrl+1/2/3 — режимы A/B/C, Ctrl+4/5/6 — усиленные, Ctrl+0 — выключить."
     ErrTitle    = 'Ошибка'
     ErrStatus   = 'Ошибка: {0}'
     ErrMsg      = "Ошибка установки:`n{0}`n`nПодробности: {1}"
@@ -858,6 +879,7 @@ $Script:T = @{
     ModeB       = 'Mode B (best for 720p)'
     ModeC       = 'Mode C (best for 480p)'
     ModeOff     = 'clear shaders (disable Anime4K)'
+    ModeBoost   = 'boost (double-pass: A+A / B+B / C+A)'
     AdvBtn      = '📖 Detailed guide'
     OpenCfg     = '📁 Open config folder'
     Footer      = 'Sources: github.com/mpvnet-player/mpv.net • builds.dotnet.microsoft.com • github.com/Tama47/Anime4K (v4.0.1) • github.com/bloc97/Anime4K (docs). Configs: %APPDATA%\mpv.net'
@@ -871,10 +893,10 @@ $Script:T = @{
     StDlNet     = 'Downloading .NET Desktop Runtime 10.0.13…'
     StInstNet   = 'Installing .NET Runtime (silent)…'
     StPreset    = 'Installing Anime4K preset ({0}) into %APPDATA%\mpv.net…'
-    StDone      = 'Done. Preset {0} in {1}. Ctrl+1/2/3 — modes, Ctrl+0 — off.'
+    StDone      = 'Done. Preset {0} in {1}. Ctrl+1/2/3 — modes, Ctrl+4/5/6 — boost, Ctrl+0 — off.'
     DlProgress  = 'Downloading…'
     DoneTitle   = 'Anime4K installed'
-    DoneMsg     = "Done!`n`nmpv.net installed system-wide, .NET 10.0.13 checked,`nAnime4K preset ({0}) extracted to:`n{1}`n`nShader order — from the archive mpv.conf.`nCtrl+1/2/3 — modes A/B/C, Ctrl+0 — off."
+    DoneMsg     = "Done!`n`nmpv.net installed system-wide, .NET 10.0.13 checked,`nAnime4K preset ({0}) extracted to:`n{1}`n`nShader order — from the archive mpv.conf.`nCtrl+1/2/3 — modes A/B/C, Ctrl+4/5/6 — boost, Ctrl+0 — off."
     ErrTitle    = 'Error'
     ErrStatus   = 'Error: {0}'
     ErrMsg      = "Install failed:`n{0}`n`nDetails: {1}"
@@ -921,10 +943,17 @@ function Set-Language {
   $w.FindName('runModeB').Text       = T ModeB
   $w.FindName('runModeC').Text       = T ModeC
   $w.FindName('runModeOff').Text     = T ModeOff
+  $w.FindName('runBoost').Text       = T ModeBoost
   $w.FindName('btnAdvanced').Content   = T AdvBtn
   $w.FindName('btnOpenConfig').Content = T OpenCfg
   $w.FindName('txtFooter').Text      = T Footer
-  $Script:LblStatus.Text = T Ready
+  # «Готов…» переводим на новый язык, но результат последней операции
+  # (успех/ошибка/ход установки в статусной строке) не затираем
+  $readyTexts = @($Script:T['RU']['Ready'], $Script:T['EN']['Ready'])
+  $status = $Script:LblStatus
+  if ($null -ne $status -and ([string]::IsNullOrEmpty($status.Text) -or $status.Text -in $readyTexts)) {
+    $status.Text = T Ready
+  }
   Update-StatusUI
 }
 
@@ -1100,7 +1129,7 @@ function Start-FullInstall {
       $Script:LblStatus.Text = T StDetect
       $Script:Bar.Value = 10
       $setup = Join-Path $env:TEMP $latest.Name
-      Invoke-DownloadFile -Url $latest.Url -Dest $setup -Bar $Script:Bar -StatusLabel $Script:LblStatus
+      Invoke-DownloadFile -Url $latest.Url -Dest $setup -Bar $Script:Bar -StatusLabel $Script:LblStatus -BarMin 10 -BarMax 40
       $Script:LblStatus.Text = T StInstMpv
       $Script:Bar.Value = 45
       $Script:Bar.IsIndeterminate = $true
@@ -1116,7 +1145,7 @@ function Start-FullInstall {
       $Script:LblStatus.Text = T StDlNet
       $Script:Bar.Value = 60
       $nd = Join-Path $env:TEMP 'windowsdesktop-runtime-10.0.13-win-x64.exe'
-      Invoke-DownloadFile -Url $Script:Cfg.DotnetUrl -Dest $nd -Bar $Script:Bar -StatusLabel $Script:LblStatus
+      Invoke-DownloadFile -Url $Script:Cfg.DotnetUrl -Dest $nd -Bar $Script:Bar -StatusLabel $Script:LblStatus -BarMin 60 -BarMax 70
       $Script:LblStatus.Text = T StInstNet
       $Script:Bar.IsIndeterminate = $true
       Install-DotnetRuntime -InstallerExe $nd -UseDispatcher $true
@@ -1130,7 +1159,7 @@ function Start-FullInstall {
     # --- Anime4K пресет ---
     $Script:LblStatus.Text = $(T StPreset) -f $which
     $Script:Bar.Value = 80
-    Install-AnimePreset -Which $which
+    Install-AnimePreset -Which $which -BarMin 80 -BarMax 93
     $Script:Bar.Value = 95
 
     Update-StatusUI
@@ -1138,7 +1167,7 @@ function Start-FullInstall {
     try { $Script:Bar.Foreground = $Script:Window.FindResource('B_Success') } catch {}
     $Script:LblStatus.Text = $(T StDone) -f $which, $Script:Cfg.ConfigDir
     Write-Log $(T DoneLog)
-    [Windows.MessageBox]::Show($(T DoneMsg) -f $which, $Script:Cfg.ConfigDir,
+    [Windows.MessageBox]::Show(($(T DoneMsg) -f $which, $Script:Cfg.ConfigDir),
       $(T DoneTitle), 'OK', 'Information') | Out-Null
   } catch {
     $msg = $_.Exception.Message
@@ -1147,7 +1176,7 @@ function Start-FullInstall {
     $Script:LblStatus.Text = $(T ErrStatus) -f $msg
     $Script:Bar.IsIndeterminate = $false
     try { $Script:Bar.Foreground = $Script:Window.FindResource('B_Error') } catch {}
-    [Windows.MessageBox]::Show($(T ErrMsg) -f $msg, $Script:Cfg.LogFile,
+    [Windows.MessageBox]::Show(($(T ErrMsg) -f $msg, $Script:Cfg.LogFile),
       $(T ErrTitle), 'OK', 'Error') | Out-Null
   } finally {
     $Script:Bar.IsIndeterminate = $false
