@@ -452,7 +452,7 @@ $Script:MainXaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="mpv.net + Anime4K — Установщик" Height="900" Width="1100"
-        MinHeight="820" MinWidth="900" WindowStartupLocation="CenterScreen"
+        MinHeight="900" MinWidth="1100" WindowStartupLocation="CenterScreen"
         Background="Transparent" Foreground="#E6E6E6" FontFamily="Segoe UI Variable, Segoe UI" FontSize="14">
   <Window.Resources>
     <!-- Токены: только Brush (Color->Brush через StaticResource падает).
@@ -1786,8 +1786,10 @@ if ([Threading.Thread]::CurrentThread.ApartmentState -ne 'STA') {
 
 $Script:Window = New-WpfWindow $Script:MainXaml
 # Размер окна подобран так, чтобы весь контент (включая раскрытый лог) был виден
-# без прокрутки. На маленьких экранах не даём окну вылезти за рабочую область —
-# тогда остаётся обычное поведение со скроллом.
+# без прокрутки, поэтому MinHeight/MinWidth равны стартовым (900x1100) — меньше
+# этого окно не ужимается, иначе контент начинает обрезаться.
+# Кламп по рабочей области оставлен как страховка: он сработает, только если
+# Min* в XAML когда-нибудь опустят ниже размера рабочего стола.
 $wa = [Windows.SystemParameters]::WorkArea
 if ($Script:Window.Height -gt ($wa.Height - 8)) {
   $Script:Window.Height = [Math]::Max($Script:Window.MinHeight, $wa.Height - 8)
