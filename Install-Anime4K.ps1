@@ -401,7 +401,7 @@ function Install-AnimePreset {
 $Script:MainXaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="mpv.net + Anime4K — Установщик" Height="890" Width="1100"
+        Title="mpv.net + Anime4K — Установщик" Height="900" Width="1100"
         MinHeight="820" MinWidth="900" WindowStartupLocation="CenterScreen"
         Background="Transparent" Foreground="#E6E6E6" FontFamily="Segoe UI Variable, Segoe UI" FontSize="14">
   <Window.Resources>
