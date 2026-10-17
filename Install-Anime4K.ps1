@@ -9,7 +9,9 @@
   - Создает %APPDATA%\mpv.net и распаковывает туда пресет Anime4K v4.0.1
     (Low-end / High-end). Приоритет/порядок шейдеров НЕ правится вручную —
     берется как есть из mpv.conf внутри архива. Перезапись молча (-Force).
-  - UI: WPF dark, два языка (RU/EN, кнопка в шапке), Quick Usage в главном окне,
+  - UI: WPF dark + Mica через DWM (Windows 11; тёмный заголовок, полупрозрачные
+    поверхности; при недоступности backdrop — сплошной тёмный фон), два языка
+    (RU/EN, кнопка в шапке), Quick Usage в главном окне,
     кнопка подробной инструкции открывает стилизованный гайд на текущем языке.
 .PARAMETER Silent
   Тихая установка без UI: -Silent -Preset Low|High
@@ -43,6 +45,10 @@ $Script:Cfg = @{
   LogFile          = (Join-Path $env:TEMP 'Anime4K-Install.log')
 }
 $Script:Lang = 'RU'
+# UI-хендлы объявляем заранее: в -Silent их нет, а StrictMode бросает на необъявленных переменных
+$Script:TxtLog = $null
+$Script:Bar = $null
+$Script:LblStatus = $null
 
 function Write-Log {
   param([string]$Message, [string]$Level = 'INFO')
@@ -290,17 +296,20 @@ $Script:MainXaml = @'
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="mpv.net + Anime4K — Установщик" Height="880" Width="980"
         MinHeight="820" MinWidth="900" WindowStartupLocation="CenterScreen"
-        Background="#202020" Foreground="#E6E6E6" FontFamily="Segoe UI Variable, Segoe UI" FontSize="14">
+        Background="Transparent" Foreground="#E6E6E6" FontFamily="Segoe UI Variable, Segoe UI" FontSize="14">
   <Window.Resources>
-    <!-- Токены: только Brush (Color->Brush через StaticResource падает) -->
-    <SolidColorBrush x:Key="B_Card" Color="#2B2B2B"/>
-    <SolidColorBrush x:Key="B_CardHover" Color="#323232"/>
-    <SolidColorBrush x:Key="B_Subtle" Color="#2D2D2D"/>
-    <SolidColorBrush x:Key="B_Pressed" Color="#262626"/>
-    <SolidColorBrush x:Key="B_Log" Color="#101010"/>
+    <!-- Токены: только Brush (Color->Brush через StaticResource падает).
+         Фон — Transparent, поверхности с альфой (AARRGGBB): сквозь них видна Mica
+         на Windows 11. Если backdrop недоступен, Enable-FluentChrome вернёт сплошной
+         #202020, и полупрозрачные поверхности смешаются с ним как раньше. -->
+    <SolidColorBrush x:Key="B_Card" Color="#A62B2B2B"/>
+    <SolidColorBrush x:Key="B_CardHover" Color="#C0323232"/>
+    <SolidColorBrush x:Key="B_Subtle" Color="#A62D2D2D"/>
+    <SolidColorBrush x:Key="B_Pressed" Color="#E0262626"/>
+    <SolidColorBrush x:Key="B_Log" Color="#D9101010"/>
     <SolidColorBrush x:Key="B_LogText" Color="#D6D6D6"/>
-    <SolidColorBrush x:Key="B_Border" Color="#333333"/>
-    <SolidColorBrush x:Key="B_BorderStrong" Color="#454545"/>
+    <SolidColorBrush x:Key="B_Border" Color="#59333333"/>
+    <SolidColorBrush x:Key="B_BorderStrong" Color="#73454545"/>
     <SolidColorBrush x:Key="B_Accent" Color="#60CDFF"/>
     <SolidColorBrush x:Key="B_AccentHover" Color="#70D3FF"/>
     <SolidColorBrush x:Key="B_AccentPressed" Color="#40B0E0"/>
@@ -581,9 +590,9 @@ $Script:AdvancedXaml = @'
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Подробная инструкция — Anime4K GLSL / MPV v4.x" Height="820" Width="960"
         MinHeight="680" MinWidth="860" WindowStartupLocation="CenterScreen"
-        Background="#202020" Foreground="#E6E6E6" FontFamily="Segoe UI Variable, Segoe UI" FontSize="13.5">
+        Background="Transparent" Foreground="#E6E6E6" FontFamily="Segoe UI Variable, Segoe UI" FontSize="13.5">
   <Grid Margin="0">
-    <FlowDocumentScrollViewer VerticalScrollBarVisibility="Auto" Padding="24">
+    <FlowDocumentScrollViewer Background="Transparent" VerticalScrollBarVisibility="Auto" Padding="24">
       <FlowDocument Background="Transparent" Foreground="#E6E6E6" FontFamily="Segoe UI Variable, Segoe UI" FontSize="13.5" PagePadding="0">
         <Paragraph Margin="0,0,0,4">
           <Run FontSize="22" FontWeight="Bold" Text="Подробная инструкция "/>
@@ -676,9 +685,9 @@ $Script:AdvancedXamlEn = @'
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Advanced Usage Instructions — Anime4K GLSL / MPV v4.x" Height="820" Width="960"
         MinHeight="680" MinWidth="860" WindowStartupLocation="CenterScreen"
-        Background="#202020" Foreground="#E6E6E6" FontFamily="Segoe UI Variable, Segoe UI" FontSize="13.5">
+        Background="Transparent" Foreground="#E6E6E6" FontFamily="Segoe UI Variable, Segoe UI" FontSize="13.5">
   <Grid Margin="0">
-    <FlowDocumentScrollViewer VerticalScrollBarVisibility="Auto" Padding="24">
+    <FlowDocumentScrollViewer Background="Transparent" VerticalScrollBarVisibility="Auto" Padding="24">
       <FlowDocument Background="Transparent" Foreground="#E6E6E6" FontFamily="Segoe UI Variable, Segoe UI" FontSize="13.5" PagePadding="0">
         <Paragraph Margin="0,0,0,4">
           <Run FontSize="22" FontWeight="Bold" Text="Advanced Usage Instructions "/>
@@ -931,22 +940,90 @@ function New-WpfWindow {
 # ------------------------------------------------- Fluent chrome (dark titlebar + Mica) ---
 # Guard: повторный Add-Type в той же сессии падает, поэтому -as [type] проверка.
 # Важно: Handle валиден только после SourceInitialized, вызов до ShowDialog с $h=0 молча ничего не сделает.
-if (-not ('Win.DwmNative' -as [type])) {
-  Add-Type -Namespace Win -Name DwmNative -MemberDefinition @'
+if (-not ('Win.DwmApi' -as [type])) {
+  Add-Type -Namespace Win -Name DwmApi -MemberDefinition @'
 [System.Runtime.InteropServices.DllImport("dwmapi.dll")] public static extern int DwmSetWindowAttribute(System.IntPtr hwnd, int attr, ref int val, int size);
+[System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)] public struct MARGINS { public int left; public int right; public int top; public int bottom; }
+[System.Runtime.InteropServices.DllImport("dwmapi.dll")] public static extern int DwmExtendFrameIntoClientArea(System.IntPtr hwnd, ref MARGINS margins);
 '@
 }
+function Get-WindowsBuild {
+  # Реестр не врёт о номере сборки, в отличие от Environment.OSVersion (нужен манифест)
+  try {
+    $cv = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' -ErrorAction SilentlyContinue
+    if ($cv -and $cv.PSObject.Properties['CurrentBuildNumber']) {
+      $b = 0
+      if ([int]::TryParse([string]$cv.CurrentBuildNumber, [ref]$b)) { return $b }
+    }
+  } catch {}
+  try { return [Environment]::OSVersion.Version.Build } catch { return 0 }
+}
+
+function Test-MicaUsable {
+  # Mica рисует DWM: нужны Windows 11, включённые эффекты прозрачности, локальная сессия
+  if ((Get-WindowsBuild) -lt 22000) { return $false }
+  try {
+    $tp = Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize' -ErrorAction SilentlyContinue
+    if ($tp -and $tp.PSObject.Properties['EnableTransparency'] -and [int]$tp.EnableTransparency -eq 0) { return $false }
+  } catch {}
+  if ($env:SESSIONNAME -like 'RDP*') { return $false }
+  return $true
+}
+
+# DWMWA_USE_IMMERSIVE_DARK_MODE (20) — тёмный заголовок.
+# DWMWA_SYSTEMBACKDROP_TYPE (38): 2 = Mica (MAINWINDOW), 3 = Acrylic (TRANSIENTWINDOW); сборка 22621+.
+# DWMWA_MICA_EFFECT (1029): legacy-путь для 22000 (21H2), где атрибута 38 ещё нет.
 function Enable-FluentChrome {
   param($win)
+  $solid = $null
+  try { $solid = New-Object Windows.Media.SolidColorBrush ([Windows.Media.ColorConverter]::ConvertFromString('#202020')) } catch {}
   try {
     $h = (New-Object System.Windows.Interop.WindowInteropHelper -ArgumentList $win).Handle
     if ($h -eq [IntPtr]::Zero) { return $false } # ещё нет HWND — вызовет SourceInitialized
-    $dark = 1; [void][Win.DwmNative]::DwmSetWindowAttribute($h, 20, [ref]$dark, 4)
-    # Mica (38) на WPF с Transparent на части сборок даёт чисто чёрный клиент вместо текстуры,
-    # поэтому клиент оставляем сплошным #202020 — тёмный titlebar уже даёт Fluent-вид.
-    # Не раскомментировать без проверки на 22621+: $mica=2; DwmSetWindowAttribute(h,38)+Transparent.
-    return $true
-  } catch { return $false }
+
+    $dark = 1; [void][Win.DwmApi]::DwmSetWindowAttribute($h, 20, [ref]$dark, 4)
+
+    $backdrop = -1
+    if (Test-MicaUsable) {
+      if ((Get-WindowsBuild) -ge 22621) {
+        $mica = 2
+        if ([Win.DwmApi]::DwmSetWindowAttribute($h, 38, [ref]$mica, 4) -eq 0) { $backdrop = 2 }
+        else {
+          $acrylic = 3 # Acrylic — если Mica недоступна (VM), но backdrop-атрибут поддерживается
+          if ([Win.DwmApi]::DwmSetWindowAttribute($h, 38, [ref]$acrylic, 4) -eq 0) { $backdrop = 3 }
+        }
+      }
+      if ($backdrop -lt 0) {
+        $on = 1
+        if ([Win.DwmApi]::DwmSetWindowAttribute($h, 1029, [ref]$on, 4) -eq 0) { $backdrop = 1 } # 21H2
+      }
+    }
+
+    if ($backdrop -gt 0) {
+      # Для обычных Win32/WPF-окон материал проявляется только в области "glass-frame":
+      # без расширения DWM заливает клиент сплошным fallback-цветом, а Mica виден лишь
+      # в заголовке. MARGINS=-1 растягивает область на весь клиент (проверено на 26H2).
+      $m = New-Object 'Win.DwmApi+MARGINS'
+      $m.left = -1; $m.right = -1; $m.top = -1; $m.bottom = -1
+      [void][Win.DwmApi]::DwmExtendFrameIntoClientArea($h, [ref]$m)
+      # Ключ к Mica в WPF: HwndTarget должен очищать поверхность в прозрачность,
+      # иначе сплошная заливка WPF полностью закроет текстуру DWM.
+      # AllowsTransparency при этом остаётся False (слоёные окна Mica не получают).
+      $src = [Windows.Interop.HwndSource]::FromHwnd($h)
+      if ($src -and $src.CompositionTarget) {
+        $src.CompositionTarget.BackgroundColor = [Windows.Media.Colors]::Transparent
+      }
+      $win.Background = [Windows.Media.Brushes]::Transparent
+      return $true
+    }
+
+    # Windows 10 / выключены эффекты прозрачности / атрибут не принят — сплошной фон
+    if ($solid) { $win.Background = $solid }
+    return $false
+  } catch {
+    if ($solid) { try { $win.Background = $solid } catch {} }
+    return $false
+  }
 }
 
 function Update-StatusUI {
@@ -979,6 +1056,8 @@ function Show-AdvancedWindow {
   $x = if ($Script:Lang -eq 'EN') { $Script:AdvancedXamlEn } else { $Script:AdvancedXaml }
   $w = New-WpfWindow $x
   try { $w.Owner = $Script:Window } catch {}
+  # То же Fluent-оформление, что и у главного окна (HWND готов к SourceInitialized)
+  $w.Add_SourceInitialized(({ [void](Enable-FluentChrome $w) }).GetNewClosure())
   $w.ShowDialog() | Out-Null
 }
 
