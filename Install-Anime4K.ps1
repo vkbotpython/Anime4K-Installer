@@ -447,6 +447,85 @@ function Install-AnimePreset {
   Write-Log "Пресет $Which установлен в $dest"
 }
 
+# ------------------------------------------------- Скроллбар (общий XAML) ---
+# Ресурсы между окнами не наследуются, поэтому тонкий тёмный скроллбар держим
+# одним фрагментом и подставляем в Window.Resources каждого окна по маркеру
+# <!--@SCROLLBAR@--> (подстановка — в New-WpfWindow).
+# Вид: трек прозрачный, стрелок нет, ползунок-«пилюля»; при наведении и
+# перетаскивании он становится шире и ярче — как в Windows 11 Fluent.
+$Script:ScrollBarXaml = @'
+    <ControlTemplate x:Key="TplScrollThumbV" TargetType="Thumb">
+      <Border x:Name="tb" Background="#40FFFFFF" CornerRadius="4" Margin="3,2"/>
+      <ControlTemplate.Triggers>
+        <Trigger Property="IsMouseOver" Value="True">
+          <Setter TargetName="tb" Property="Background" Value="#73FFFFFF"/>
+          <Setter TargetName="tb" Property="Margin" Value="2,1"/>
+        </Trigger>
+        <Trigger Property="IsDragging" Value="True">
+          <Setter TargetName="tb" Property="Background" Value="#A6FFFFFF"/>
+          <Setter TargetName="tb" Property="Margin" Value="2,1"/>
+        </Trigger>
+      </ControlTemplate.Triggers>
+    </ControlTemplate>
+    <ControlTemplate x:Key="TplScrollThumbH" TargetType="Thumb">
+      <Border x:Name="tb" Background="#40FFFFFF" CornerRadius="4" Margin="2,3"/>
+      <ControlTemplate.Triggers>
+        <Trigger Property="IsMouseOver" Value="True">
+          <Setter TargetName="tb" Property="Background" Value="#73FFFFFF"/>
+          <Setter TargetName="tb" Property="Margin" Value="1,2"/>
+        </Trigger>
+        <Trigger Property="IsDragging" Value="True">
+          <Setter TargetName="tb" Property="Background" Value="#A6FFFFFF"/>
+          <Setter TargetName="tb" Property="Margin" Value="1,2"/>
+        </Trigger>
+      </ControlTemplate.Triggers>
+    </ControlTemplate>
+    <ControlTemplate x:Key="TplScrollBarV" TargetType="ScrollBar">
+      <Grid Background="Transparent">
+        <Track x:Name="PART_Track" Orientation="Vertical" IsDirectionReversed="True">
+          <Track.DecreaseRepeatButton>
+            <RepeatButton Command="ScrollBar.PageUpCommand" Focusable="False" Opacity="0"/>
+          </Track.DecreaseRepeatButton>
+          <Track.Thumb>
+            <Thumb MinHeight="34" Template="{StaticResource TplScrollThumbV}"/>
+          </Track.Thumb>
+          <Track.IncreaseRepeatButton>
+            <RepeatButton Command="ScrollBar.PageDownCommand" Focusable="False" Opacity="0"/>
+          </Track.IncreaseRepeatButton>
+        </Track>
+      </Grid>
+    </ControlTemplate>
+    <ControlTemplate x:Key="TplScrollBarH" TargetType="ScrollBar">
+      <Grid Background="Transparent">
+        <Track x:Name="PART_Track" Orientation="Horizontal">
+          <Track.DecreaseRepeatButton>
+            <RepeatButton Command="ScrollBar.PageLeftCommand" Focusable="False" Opacity="0"/>
+          </Track.DecreaseRepeatButton>
+          <Track.Thumb>
+            <Thumb MinWidth="34" Template="{StaticResource TplScrollThumbH}"/>
+          </Track.Thumb>
+          <Track.IncreaseRepeatButton>
+            <RepeatButton Command="ScrollBar.PageRightCommand" Focusable="False" Opacity="0"/>
+          </Track.IncreaseRepeatButton>
+        </Track>
+      </Grid>
+    </ControlTemplate>
+    <Style x:Key="FluentScrollBar" TargetType="ScrollBar">
+      <Setter Property="Width" Value="12"/>
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="Focusable" Value="False"/>
+      <Setter Property="Template" Value="{StaticResource TplScrollBarV}"/>
+      <Style.Triggers>
+        <Trigger Property="Orientation" Value="Horizontal">
+          <Setter Property="Width" Value="Auto"/>
+          <Setter Property="Height" Value="12"/>
+          <Setter Property="Template" Value="{StaticResource TplScrollBarH}"/>
+        </Trigger>
+      </Style.Triggers>
+    </Style>
+    <Style TargetType="ScrollBar" BasedOn="{StaticResource FluentScrollBar}"/>
+'@
+
 # ------------------------------------------------- XAML: главное окно ---
 $Script:MainXaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -455,6 +534,7 @@ $Script:MainXaml = @'
         MinHeight="900" MinWidth="1100" WindowStartupLocation="CenterScreen"
         Background="Transparent" Foreground="#E6E6E6" FontFamily="Segoe UI Variable, Segoe UI" FontSize="14">
   <Window.Resources>
+    <!--@SCROLLBAR@-->
     <!-- Токены: только Brush (Color->Brush через StaticResource падает).
          Фон — Transparent, поверхности с альфой (AARRGGBB): сквозь них видна Mica
          на Windows 11. Если backdrop недоступен, Enable-FluentChrome вернёт сплошной
@@ -829,47 +909,6 @@ $Script:MainXaml = @'
       <TextBlock x:Name="txtStatus" Style="{StaticResource Muted}" Text="Готов. Выберите пресет и нажмите «Установить»."/>
       <Expander x:Name="expLog" Style="{StaticResource LogExpander}" Header="Логи" IsExpanded="False">
         <RichTextBox x:Name="txtLog" Height="124" Style="{StaticResource LogConsole}">
-          <RichTextBox.Resources>
-            <!-- Тонкий тёмный скроллбар только у консоли (вертикальный) -->
-            <Style TargetType="ScrollBar">
-              <Setter Property="Width" Value="12"/>
-              <Setter Property="Background" Value="Transparent"/>
-              <Setter Property="Focusable" Value="False"/>
-              <Setter Property="Template">
-                <Setter.Value>
-                  <ControlTemplate TargetType="ScrollBar">
-                    <Grid Background="{TemplateBinding Background}">
-                      <Track x:Name="PART_Track" IsDirectionReversed="True">
-                        <Track.DecreaseRepeatButton>
-                          <RepeatButton Command="ScrollBar.PageUpCommand" Focusable="False" Opacity="0"/>
-                        </Track.DecreaseRepeatButton>
-                        <Track.Thumb>
-                          <Thumb MinHeight="28">
-                            <Thumb.Template>
-                              <ControlTemplate TargetType="Thumb">
-                                <Border x:Name="tb" Background="#3DFFFFFF" CornerRadius="3" Margin="3,2"/>
-                                <ControlTemplate.Triggers>
-                                  <Trigger Property="IsMouseOver" Value="True">
-                                    <Setter TargetName="tb" Property="Background" Value="#66FFFFFF"/>
-                                  </Trigger>
-                                  <Trigger Property="IsDragging" Value="True">
-                                    <Setter TargetName="tb" Property="Background" Value="#80FFFFFF"/>
-                                  </Trigger>
-                                </ControlTemplate.Triggers>
-                              </ControlTemplate>
-                            </Thumb.Template>
-                          </Thumb>
-                        </Track.Thumb>
-                        <Track.IncreaseRepeatButton>
-                          <RepeatButton Command="ScrollBar.PageDownCommand" Focusable="False" Opacity="0"/>
-                        </Track.IncreaseRepeatButton>
-                      </Track>
-                    </Grid>
-                  </ControlTemplate>
-                </Setter.Value>
-              </Setter>
-            </Style>
-          </RichTextBox.Resources>
           <FlowDocument PagePadding="0" LineHeight="18"/>
         </RichTextBox>
       </Expander>
@@ -905,6 +944,9 @@ $Script:AdvancedXaml = @'
         Title="Подробная инструкция — Anime4K GLSL / MPV v4.x" Height="820" Width="960"
         MinHeight="680" MinWidth="860" WindowStartupLocation="CenterScreen"
         Background="Transparent" Foreground="#E6E6E6" FontFamily="Segoe UI Variable, Segoe UI" FontSize="13.5">
+  <Window.Resources>
+    <!--@SCROLLBAR@-->
+  </Window.Resources>
   <Grid Margin="0">
     <FlowDocumentScrollViewer Background="Transparent" VerticalScrollBarVisibility="Auto" Padding="24">
       <FlowDocument Background="Transparent" Foreground="#E6E6E6" FontFamily="Segoe UI Variable, Segoe UI" FontSize="13.5" PagePadding="0">
@@ -1000,6 +1042,9 @@ $Script:AdvancedXamlEn = @'
         Title="Advanced Usage Instructions — Anime4K GLSL / MPV v4.x" Height="820" Width="960"
         MinHeight="680" MinWidth="860" WindowStartupLocation="CenterScreen"
         Background="Transparent" Foreground="#E6E6E6" FontFamily="Segoe UI Variable, Segoe UI" FontSize="13.5">
+  <Window.Resources>
+    <!--@SCROLLBAR@-->
+  </Window.Resources>
   <Grid Margin="0">
     <FlowDocumentScrollViewer Background="Transparent" VerticalScrollBarVisibility="Auto" Padding="24">
       <FlowDocument Background="Transparent" Foreground="#E6E6E6" FontFamily="Segoe UI Variable, Segoe UI" FontSize="13.5" PagePadding="0">
@@ -1096,6 +1141,7 @@ $Script:AboutXaml = @'
         WindowStartupLocation="CenterOwner" ResizeMode="NoResize" ShowInTaskbar="False"
         Background="Transparent" Foreground="#E6E6E6" FontFamily="Segoe UI Variable, Segoe UI" FontSize="13.5">
   <Window.Resources>
+    <!--@SCROLLBAR@-->
     <!-- Свои ресурсы: стили главного окна между окнами не наследуются -->
     <Style x:Key="SoftButton" TargetType="Button">
       <Setter Property="Background" Value="#A62D2D2D"/>
@@ -1434,6 +1480,9 @@ function Set-Language {
 function New-WpfWindow {
   param([string]$Xaml)
   Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase | Out-Null
+  # Ресурсы между окнами не наследуются, а копировать стиль скроллбара в каждый
+  # XAML — лишнее дублирование: в маркер подставляем общий фрагмент один раз.
+  $Xaml = $Xaml.Replace('<!--@SCROLLBAR@-->', $Script:ScrollBarXaml)
   $xml = [xml]$Xaml
   $reader = New-Object Xml.XmlNodeReader $xml
   return [Windows.Markup.XamlReader]::Load($reader)
