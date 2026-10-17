@@ -11,7 +11,7 @@
     берется как есть из mpv.conf внутри архива. Перезапись молча (-Force).
   - UI: WPF dark + Mica через DWM (Windows 11; тёмный заголовок, полупрозрачные
     поверхности; при недоступности backdrop — сплошной тёмный фон), два языка
-    (RU/EN, кнопка в шапке), Quick Usage в главном окне,
+    (RU/EN, сегменты в шапке), Quick Usage в главном окне,
     кнопка подробной инструкции открывает стилизованный гайд на текущем языке.
 .PARAMETER Silent
   Тихая установка без UI: -Silent -Preset Low|High
@@ -684,6 +684,35 @@ $Script:MainXaml = @'
       <Setter Property="BorderThickness" Value="0"/>
       <Setter Property="HorizontalAlignment" Value="Stretch"/>
     </Style>
+    <!-- Язык: один сегмент «пилюли» RU | EN. Подложку-акцент рисует соседний
+         langInd (см. XAML шапки), поэтому фон сегмента прозрачный, а текст
+         активного сегмента — тёмный (B_OnAccent), чтобы читался на акценте. -->
+    <Style x:Key="LangSegment" TargetType="RadioButton">
+      <Setter Property="Width" Value="44"/>
+      <Setter Property="Height" Value="28"/>
+      <Setter Property="Foreground" Value="{StaticResource B_TextSec}"/>
+      <Setter Property="FontSize" Value="12.5"/>
+      <Setter Property="FontWeight" Value="SemiBold"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="FocusVisualStyle" Value="{StaticResource FocusRing}"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="RadioButton">
+            <Border x:Name="seg" Background="Transparent" CornerRadius="7">
+              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsChecked" Value="True">
+                <Setter Property="Foreground" Value="{StaticResource B_OnAccent}"/>
+              </Trigger>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="seg" Property="Background" Value="#26FFFFFF"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
     <!-- Прогресс: PART_Track=фон, PART_Indicator=заливка; indeterminate=мягкий pulse -->
     <Style x:Key="FluentProgress" TargetType="ProgressBar">
       <Setter Property="Height" Value="8"/>
@@ -855,7 +884,28 @@ $Script:MainXaml = @'
           <TextBlock x:Name="txtSubtitle" Style="{StaticResource Muted}" Text="Системная установка • .NET 10 Desktop Runtime • GLSL-пресеты v4.0.1"/>
         </StackPanel>
         <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-          <Button x:Name="btnLang" Content="EN" ToolTip="RU / EN"/>
+          <!-- Сегментный переключатель RU | EN: серая «пилюля», акцентная подложка
+               (langInd) плавно съезжает под активный сегмент; сдвиг анимирует
+               Set-Language (шаг = ширина сегмента, 44). -->
+          <Border x:Name="langSwitch" Margin="0,0,8,0" Padding="3" CornerRadius="9"
+                  Background="{StaticResource B_Subtle}"
+                  BorderBrush="{StaticResource B_BorderStrong}" BorderThickness="1"
+                  ToolTip="RU / EN">
+            <Grid>
+              <Border x:Name="langInd" Width="44" Height="28" CornerRadius="7"
+                      Background="{StaticResource B_Accent}" HorizontalAlignment="Left">
+                <Border.RenderTransform>
+                  <TranslateTransform X="0"/>
+                </Border.RenderTransform>
+              </Border>
+              <StackPanel Orientation="Horizontal">
+                <RadioButton x:Name="btnLangRu" GroupName="Lang" Content="RU"
+                             Style="{StaticResource LangSegment}" ToolTip="Русский"/>
+                <RadioButton x:Name="btnLangEn" GroupName="Lang" Content="EN"
+                             Style="{StaticResource LangSegment}" ToolTip="English"/>
+              </StackPanel>
+            </Grid>
+          </Border>
           <Button x:Name="btnRecheck" Content="⟳ Проверить снова" Margin="0,0,0,0"/>
         </StackPanel>
       </Grid>
@@ -1335,7 +1385,6 @@ $Script:T = @{
     AboutCopy   = '📋 Скопировать'
     AboutCopied = '✓ Номер скопирован'
     AboutThanks = 'Спасибо за поддержку!'
-    LangBtn     = 'EN'
     AdminTitle  = 'Нужны права администратора'
     AdminMsg    = "Для системной установки mpv.net и .NET Runtime нужны права администратора.`n`nПерезапустить скрипт с повышением?"
     AdminStatus = 'Нужны права администратора. Перезапустите от имени администратора.'
@@ -1418,7 +1467,6 @@ $Script:T = @{
     AboutCopy   = '📋 Copy'
     AboutCopied = '✓ Number copied'
     AboutThanks = 'Thank you for your support!'
-    LangBtn     = 'RU'
     AdminTitle  = 'Administrator rights required'
     AdminMsg    = "System-wide install of mpv.net and .NET Runtime requires administrator rights.`n`nRelaunch the script elevated?"
     AdminStatus = 'Administrator rights required. Please relaunch as administrator.'
@@ -1474,7 +1522,23 @@ function Set-Language {
   # Если в этот момент активен тост «✓ Обновлено», останавливаем его — иначе таймер
   # вернёт старую подпись на прежнем языке и затрёт свежий перевод кнопки.
   if ($Script:RecheckTimer) { try { $Script:RecheckTimer.Stop() } catch {} }
-  $w.FindName('btnLang').Content     = T LangBtn
+  # Язык в сегментном переключателе: активный сегмент + акцентная подложка
+  # langInd под ним. Сдвиг анимируем (шаг 44 = ширина сегмента LangSegment).
+  $w.FindName('btnLangRu').IsChecked = ($Lang -eq 'RU')
+  $w.FindName('btnLangEn').IsChecked = ($Lang -eq 'EN')
+  $ind = $w.FindName('langInd')
+  if ($ind) {
+    $to = 0.0
+    if ($Lang -eq 'EN') { $to = 44.0 }
+    $anim = New-Object System.Windows.Media.Animation.DoubleAnimation
+    $anim.To = $to
+    $anim.Duration = (New-Object System.Windows.Duration -ArgumentList ([TimeSpan]::FromMilliseconds(180)))
+    $ease = New-Object System.Windows.Media.Animation.CubicEase
+    $ease.EasingMode = [System.Windows.Media.Animation.EasingMode]::EaseOut
+    $anim.EasingFunction = $ease
+    $w.FindName('langInd').RenderTransform.BeginAnimation(
+      [System.Windows.Media.TranslateTransform]::XProperty, $anim)
+  }
   $w.FindName('txtStep1').Text       = T Step1
   $w.FindName('txtMpvTitle').Text    = T MpvTitle
   $w.FindName('txtMpvSub').Text      = T MpvSub
@@ -2161,8 +2225,13 @@ $Script:TxtLog    = $Script:Window.FindName('txtLog')
 if ($Preset -eq 'Low') { $Script:RbLow.IsChecked = $true } else { $Script:RbHigh.IsChecked = $true }
 
 $Script:Window.FindName('btnRecheck').Add_Click({ Update-StatusUI -Notify })
-$Script:Window.FindName('btnLang').Add_Click({
-  if ($Script:Lang -eq 'RU') { Set-Language 'EN' } else { Set-Language 'RU' }
+# RadioButton сам держит взаимоисключение (GroupName=Lang); Set-Language лишь
+# применяет перевод. Guard — чтобы IsChecked изнутри Set-Language не ушёл в рекурсию.
+$Script:Window.FindName('btnLangRu').Add_Checked({
+  if ($Script:Lang -ne 'RU') { Set-Language 'RU' }
+})
+$Script:Window.FindName('btnLangEn').Add_Checked({
+  if ($Script:Lang -ne 'EN') { Set-Language 'EN' }
 })
 $Script:BtnInstall.Add_Click({ Start-FullInstall })
 $Script:Window.FindName('btnAdvanced').Add_Click({ Show-AdvancedWindow })
