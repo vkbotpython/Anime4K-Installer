@@ -61,6 +61,8 @@ $Script:LblPreset = $null
 $Script:DotPreset = $null
 $Script:GuideWindow = $null
 $Script:AboutWindow = $null
+# Тост-таймер окна «О программе» (переключает «Спасибо…» / «✓ Номер скопирован»)
+$Script:AboutCopyTimer = $null
 
 # Кисти строк лога кэшируем: цвета берём из палитры окна, при отсутствии — фолбэк
 function Get-LogBrush {
@@ -1138,24 +1140,47 @@ $Script:AboutXaml = @'
       </WrapPanel>
 
       <TextBlock x:Name="abtDonateTitle" Style="{StaticResource H2}" Text="Поддержать автора"/>
-      <Border Background="#A62B2B2B" BorderBrush="#59333333" BorderThickness="1" CornerRadius="8" Padding="16">
-        <StackPanel>
-          <StackPanel Orientation="Horizontal">
-            <Grid Width="16" Height="16" VerticalAlignment="Center" Margin="0,0,7,0">
+      <!-- Донат: номер карты — в отдельном «поле» на всю ширину блока (по центру),
+           кнопка копирования — той же высоты справа. Шапка — одна строка: слева
+           логотип Сбера с подписью, справа «Спасибо…»/подтверждение копирования
+           (два TextBlock в одной ячейке, переключаются Opacity — высота и ширина
+           блока не меняются, пустых полос нет). -->
+      <Border Background="#A62B2B2B" BorderBrush="#59333333" BorderThickness="1" CornerRadius="10" Padding="14">
+        <Grid>
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*"/>
+            <ColumnDefinition Width="Auto"/>
+          </Grid.ColumnDefinitions>
+          <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+          </Grid.RowDefinitions>
+
+          <StackPanel Grid.Row="0" Grid.Column="0" Orientation="Horizontal">
+            <Grid Width="18" Height="18" VerticalAlignment="Center">
               <Ellipse Fill="#21A038"/>
-              <Path Data="{StaticResource Ic_Sber}" Fill="#FFFFFF" Stretch="Uniform" Margin="3"/>
+              <Path Data="{StaticResource Ic_Sber}" Fill="#FFFFFF" Stretch="Uniform" Margin="3.5"/>
             </Grid>
-            <TextBlock x:Name="abtCardHint" Style="{StaticResource Muted}" VerticalAlignment="Center" Text="Перевод по номеру карты — SBER"/>
+            <TextBlock x:Name="abtCardHint" Style="{StaticResource Muted}" Margin="8,0,0,0"
+                       VerticalAlignment="Center" Text="Перевод по номеру карты — SBER"/>
           </StackPanel>
-          <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+          <TextBlock x:Name="abtThanks" Grid.Row="0" Grid.Column="1" Style="{StaticResource Muted}"
+                     Margin="12,0,0,0" HorizontalAlignment="Right" VerticalAlignment="Center"
+                     Text="Спасибо за поддержку!"/>
+          <TextBlock x:Name="lblCopyState" Grid.Row="0" Grid.Column="1" Style="{StaticResource Muted}"
+                     Foreground="#6CCB5F" Opacity="0" Margin="12,0,0,0"
+                     HorizontalAlignment="Right" VerticalAlignment="Center"
+                     Text="✓ Номер скопирован"/>
+
+          <Border Grid.Row="1" Grid.Column="0" Background="#8C1B1B1B" BorderBrush="#33FFFFFF"
+                  BorderThickness="1" CornerRadius="6" Padding="12,7" Margin="0,10,0,0">
             <TextBlock x:Name="txtCard" Text="2202 2050 1464 4675" FontFamily="Cascadia Code, Consolas"
-                       FontSize="16" VerticalAlignment="Center"/>
-            <Button x:Name="btnCopyCard" Style="{StaticResource SoftButton}" Margin="14,0,0,0" Content="📋 Скопировать"/>
-          </StackPanel>
-          <TextBlock x:Name="lblCopyState" Style="{StaticResource Muted}" Foreground="#6CCB5F"
-                     Visibility="Hidden" Margin="0,6,0,0" Text="Номер скопирован в буфер обмена"/>
-          <TextBlock x:Name="abtThanks" Style="{StaticResource Muted}" Margin="0,8,0,0" Text="Спасибо за поддержку!"/>
-        </StackPanel>
+                       FontSize="16" FontWeight="SemiBold" Foreground="#FFFFFF"
+                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
+          </Border>
+          <Button x:Name="btnCopyCard" Grid.Row="1" Grid.Column="1" Style="{StaticResource SoftButton}"
+                  Margin="10,10,0,0" Padding="14,0" VerticalAlignment="Stretch" Content="📋 Скопировать"/>
+        </Grid>
       </Border>
     </StackPanel>
   </ScrollViewer>
@@ -1205,7 +1230,7 @@ $Script:T = @{
     AboutDonate = 'Поддержать автора'
     AboutCardHint = 'Перевод по номеру карты — SBER'
     AboutCopy   = '📋 Скопировать'
-    AboutCopied = 'Номер скопирован в буфер обмена'
+    AboutCopied = '✓ Номер скопирован'
     AboutThanks = 'Спасибо за поддержку!'
     LangBtn     = 'EN'
     AdminTitle  = 'Нужны права администратора'
@@ -1277,7 +1302,7 @@ $Script:T = @{
     AboutDonate = 'Support the author'
     AboutCardHint = 'Bank transfer by card number — SBER'
     AboutCopy   = '📋 Copy'
-    AboutCopied = 'Card number copied to clipboard'
+    AboutCopied = '✓ Number copied'
     AboutThanks = 'Thank you for your support!'
     LangBtn     = 'RU'
     AdminTitle  = 'Administrator rights required'
@@ -1521,9 +1546,24 @@ function Show-AboutWindow {
     # В буфер кладём номер без пробелов — его удобно вставить в банковское приложение
     try {
       Set-Clipboard -Value ($Script:Cfg.DonateSber -replace '\D', '')
-      $Script:AboutWindow.FindName('lblCopyState').Visibility = 'Visible'
+      # Подтверждение показываем в шапке блока поверх «Спасибо…» (Opacity, не Visibility:
+      # место под строку уже занято, поэтому ничего не прыгает и не появляется пустота).
+      $Script:AboutWindow.FindName('abtThanks').Opacity    = 0
+      $Script:AboutWindow.FindName('lblCopyState').Opacity = 1
+      $Script:AboutCopyTimer.Stop()
+      $Script:AboutCopyTimer.Start()
     } catch {}
   })
+  # Через 3 секунды шапка возвращается к «Спасибо за поддержку!»
+  if ($Script:AboutCopyTimer) { try { $Script:AboutCopyTimer.Stop() } catch {} }
+  $toast = New-Object System.Windows.Threading.DispatcherTimer
+  $toast.Interval = [TimeSpan]::FromSeconds(3)
+  $toast.Add_Tick({
+    $Script:AboutCopyTimer.Stop()
+    $Script:AboutWindow.FindName('abtThanks').Opacity    = 1
+    $Script:AboutWindow.FindName('lblCopyState').Opacity = 0
+  })
+  $Script:AboutCopyTimer = $toast
   # Как у остальных окон: обработчик через переменную скрипта (GetNewClosure не работает
   # с функциями скрипта), Mica/тёмный заголовок — после появления HWND
   $Script:AboutWindow = $w
