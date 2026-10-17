@@ -42,6 +42,12 @@ $Script:Cfg = @{
   AnimeTag         = 'v4.0.1'
   AnimeLowUrl      = 'https://github.com/Tama47/Anime4K/releases/download/v4.0.1/GLSL_Windows_Low-end.zip'
   AnimeHighUrl     = 'https://github.com/Tama47/Anime4K/releases/download/v4.0.1/GLSL_Windows_High-end.zip'
+  # «О программе»: соцсети автора и донат — как в README проекта
+  SocialYouTube    = 'https://www.youtube.com/@avencores/'
+  SocialTelegram   = 'https://t.me/avencoresyt'
+  SocialVk         = 'https://vk.ru/avencoresreuploads'
+  SocialDzen       = 'https://dzen.ru/avencores'
+  DonateSber       = '2202 2050 1464 4675'
   ConfigDir        = (Join-Path $env:APPDATA 'mpv.net')
   LogFile          = (Join-Path $env:TEMP 'Anime4K-Install.log')
 }
@@ -54,6 +60,7 @@ $Script:LblStatus = $null
 $Script:LblPreset = $null
 $Script:DotPreset = $null
 $Script:GuideWindow = $null
+$Script:AboutWindow = $null
 
 # Кисти строк лога кэшируем: цвета берём из палитры окна, при отсутствии — фолбэк
 function Get-LogBrush {
@@ -830,12 +837,12 @@ $Script:MainXaml = @'
         </StackPanel>
       </Border>
 
-      <!-- Footer -->
+      <!-- Footer: строки источников больше нет — вся информация в «О программе» -->
       <StackPanel Orientation="Horizontal" HorizontalAlignment="Left">
         <Button x:Name="btnAdvanced" Content="📖 Подробная инструкция" Background="#31364A" Foreground="White"/>
-        <Button x:Name="btnOpenConfig" Content="📁 Открыть папку конфига" Margin="0,0,0,0"/>
+        <Button x:Name="btnOpenConfig" Content="📁 Открыть папку конфига"/>
+        <Button x:Name="btnAbout" Content="ℹ О программе" Margin="0,0,0,0"/>
       </StackPanel>
-      <TextBlock x:Name="txtFooter" Style="{StaticResource Muted}" Margin="0,10,0,0" Text="Источники: github.com/mpvnet-player/mpv.net • builds.dotnet.microsoft.com • github.com/Tama47/Anime4K (v4.0.1) • github.com/bloc97/Anime4K (доки). Конфиги: %APPDATA%\mpv.net"/>
     </StackPanel>
   </ScrollViewer>
 </Window>
@@ -1031,6 +1038,91 @@ $Script:AdvancedXamlEn = @'
 </Window>
 '@
 
+# ------------------------------------------------- XAML: О программе ---
+$Script:AboutXaml = @'
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="О программе" SizeToContent="Height" Width="500"
+        WindowStartupLocation="CenterOwner" ResizeMode="NoResize" ShowInTaskbar="False"
+        Background="Transparent" Foreground="#E6E6E6" FontFamily="Segoe UI Variable, Segoe UI" FontSize="13.5">
+  <Window.Resources>
+    <!-- Свои ресурсы: стили главного окна между окнами не наследуются -->
+    <Style x:Key="SoftButton" TargetType="Button">
+      <Setter Property="Background" Value="#A62D2D2D"/>
+      <Setter Property="Foreground" Value="#FFFFFF"/>
+      <Setter Property="BorderBrush" Value="#73454545"/>
+      <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="Padding" Value="12,6"/>
+      <Setter Property="Margin" Value="0,0,8,8"/>
+      <Setter Property="MinHeight" Value="32"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Border x:Name="b" Background="{TemplateBinding Background}"
+                    BorderBrush="{TemplateBinding BorderBrush}"
+                    BorderThickness="{TemplateBinding BorderThickness}"
+                    CornerRadius="4" Padding="{TemplateBinding Padding}">
+              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="b" Property="Background" Value="#C0323232"/>
+              </Trigger>
+              <Trigger Property="IsPressed" Value="True">
+                <Setter TargetName="b" Property="Background" Value="#E0262626"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+    <Style x:Key="H2" TargetType="TextBlock">
+      <Setter Property="FontSize" Value="15"/>
+      <Setter Property="FontWeight" Value="SemiBold"/>
+      <Setter Property="Foreground" Value="#FFFFFF"/>
+      <Setter Property="Margin" Value="0,18,0,8"/>
+    </Style>
+    <Style x:Key="Muted" TargetType="TextBlock">
+      <Setter Property="Foreground" Value="#C7C7C7"/>
+      <Setter Property="FontSize" Value="12"/>
+      <Setter Property="TextWrapping" Value="Wrap"/>
+      <Setter Property="LineHeight" Value="17"/>
+    </Style>
+  </Window.Resources>
+  <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Padding="24">
+    <StackPanel>
+      <TextBlock Text="mpv.net + Anime4K" FontSize="24" FontWeight="Bold"/>
+      <TextBlock x:Name="abtSubtitle" Foreground="#60CDFF" Margin="0,4,0,0" Text="Установщик • Лицензия GPL-3.0"/>
+      <TextBlock x:Name="abtDesc" Style="{StaticResource Muted}" FontSize="13" Margin="0,12,0,0"/>
+
+      <TextBlock x:Name="abtSocialTitle" Style="{StaticResource H2}" Text="Соцсети автора"/>
+      <WrapPanel>
+        <Button x:Name="btnYouTube"  Style="{StaticResource SoftButton}" Content="YouTube"/>
+        <Button x:Name="btnTelegram" Style="{StaticResource SoftButton}" Content="Telegram"/>
+        <Button x:Name="btnVk"       Style="{StaticResource SoftButton}" Content="VK"/>
+        <Button x:Name="btnDzen"     Style="{StaticResource SoftButton}" Content="Dzen"/>
+      </WrapPanel>
+
+      <TextBlock x:Name="abtDonateTitle" Style="{StaticResource H2}" Text="Поддержать автора"/>
+      <Border Background="#A62B2B2B" BorderBrush="#59333333" BorderThickness="1" CornerRadius="8" Padding="16">
+        <StackPanel>
+          <TextBlock x:Name="abtCardHint" Style="{StaticResource Muted}" Text="Перевод по номеру карты — SBER"/>
+          <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+            <TextBlock x:Name="txtCard" Text="2202 2050 1464 4675" FontFamily="Cascadia Code, Consolas"
+                       FontSize="16" VerticalAlignment="Center"/>
+            <Button x:Name="btnCopyCard" Style="{StaticResource SoftButton}" Margin="14,0,0,0" Content="📋 Скопировать"/>
+          </StackPanel>
+          <TextBlock x:Name="lblCopyState" Style="{StaticResource Muted}" Foreground="#6CCB5F"
+                     Visibility="Hidden" Margin="0,6,0,0" Text="Номер скопирован в буфер обмена"/>
+          <TextBlock x:Name="abtThanks" Style="{StaticResource Muted}" Margin="0,8,0,0" Text="Спасибо за поддержку!"/>
+        </StackPanel>
+      </Border>
+    </StackPanel>
+  </ScrollViewer>
+</Window>
+'@
+
 # ------------------------------------------------- Локализация ---
 $Script:T = @{
   RU = @{
@@ -1066,7 +1158,16 @@ $Script:T = @{
     ModeBoost   = 'усиленные (двойной проход: A+A / B+B / C+A)'
     AdvBtn      = '📖 Подробная инструкция'
     OpenCfg     = '📁 Открыть папку конфига'
-    Footer      = 'Источники: github.com/mpvnet-player/mpv.net • builds.dotnet.microsoft.com • github.com/Tama47/Anime4K (v4.0.1) • github.com/bloc97/Anime4K (доки). Конфиги: %APPDATA%\mpv.net'
+    AboutBtn    = 'ℹ О программе'
+    AboutTitle  = 'О программе'
+    AboutSubtitle = 'Установщик • Лицензия GPL-3.0'
+    AboutDesc   = 'Однофайловый установщик на чистом PowerShell: ставит mpv.net системно, проверяет и при необходимости добавляет .NET Desktop Runtime, а затем разворачивает GLSL-пресет Anime4K v4.0.1 в конфиг mpv.net. Тёмный WPF-интерфейс с Mica, поддержкой RU/EN и живым прогрессом.'
+    AboutSocial = 'Соцсети автора'
+    AboutDonate = 'Поддержать автора'
+    AboutCardHint = 'Перевод по номеру карты — SBER'
+    AboutCopy   = '📋 Скопировать'
+    AboutCopied = 'Номер скопирован в буфер обмена'
+    AboutThanks = 'Спасибо за поддержку!'
     LangBtn     = 'EN'
     AdminTitle  = 'Нужны права администратора'
     AdminMsg    = "Для системной установки mpv.net и .NET Runtime нужны права администратора.`n`nПерезапустить скрипт с повышением?"
@@ -1129,7 +1230,16 @@ $Script:T = @{
     ModeBoost   = 'boost (double-pass: A+A / B+B / C+A)'
     AdvBtn      = '📖 Detailed guide'
     OpenCfg     = '📁 Open config folder'
-    Footer      = 'Sources: github.com/mpvnet-player/mpv.net • builds.dotnet.microsoft.com • github.com/Tama47/Anime4K (v4.0.1) • github.com/bloc97/Anime4K (docs). Configs: %APPDATA%\mpv.net'
+    AboutBtn    = 'ℹ About'
+    AboutTitle  = 'About'
+    AboutSubtitle = 'Installer • GPL-3.0 license'
+    AboutDesc   = 'Single-file pure-PowerShell installer: installs mpv.net system-wide, checks and installs the .NET Desktop Runtime when needed, then deploys the Anime4K v4.0.1 GLSL preset into the mpv.net config. Dark WPF UI with Mica, RU/EN support and live progress.'
+    AboutSocial = 'Follow the author'
+    AboutDonate = 'Support the author'
+    AboutCardHint = 'Bank transfer by card number — SBER'
+    AboutCopy   = '📋 Copy'
+    AboutCopied = 'Card number copied to clipboard'
+    AboutThanks = 'Thank you for your support!'
     LangBtn     = 'RU'
     AdminTitle  = 'Administrator rights required'
     AdminMsg    = "System-wide install of mpv.net and .NET Runtime requires administrator rights.`n`nRelaunch the script elevated?"
@@ -1193,7 +1303,7 @@ function Set-Language {
   $w.FindName('runBoost').Text       = T ModeBoost
   $w.FindName('btnAdvanced').Content   = T AdvBtn
   $w.FindName('btnOpenConfig').Content = T OpenCfg
-  $w.FindName('txtFooter').Text      = T Footer
+  $w.FindName('btnAbout').Content      = T AboutBtn
   # «Готов…» переводим на новый язык, но результат последней операции
   # (успех/ошибка/ход установки в статусной строке) не затираем
   $readyTexts = @($Script:T['RU']['Ready'], $Script:T['EN']['Ready'])
@@ -1347,6 +1457,38 @@ function Show-AdvancedWindow {
   # скрипта (падало с CommandNotFoundException на Enable-FluentChrome).
   $Script:GuideWindow = $w
   $w.Add_SourceInitialized({ [void](Enable-FluentChrome $Script:GuideWindow) })
+  $w.ShowDialog() | Out-Null
+}
+
+function Show-AboutWindow {
+  $w = New-WpfWindow $Script:AboutXaml
+  try { $w.Owner = $Script:Window } catch {}
+  # Тексты — из локализации, ссылки и донат — из README (хранятся в $Script:Cfg)
+  $w.Title = T AboutTitle
+  $w.FindName('abtSubtitle').Text    = T AboutSubtitle
+  $w.FindName('abtDesc').Text        = T AboutDesc
+  $w.FindName('abtSocialTitle').Text = T AboutSocial
+  $w.FindName('abtDonateTitle').Text = T AboutDonate
+  $w.FindName('abtCardHint').Text    = T AboutCardHint
+  $w.FindName('abtThanks').Text      = T AboutThanks
+  $w.FindName('lblCopyState').Text   = T AboutCopied
+  $w.FindName('btnCopyCard').Content = T AboutCopy
+  $w.FindName('txtCard').Text        = $Script:Cfg.DonateSber
+  $w.FindName('btnYouTube').Add_Click({  Start-Process $Script:Cfg.SocialYouTube })
+  $w.FindName('btnTelegram').Add_Click({ Start-Process $Script:Cfg.SocialTelegram })
+  $w.FindName('btnVk').Add_Click({       Start-Process $Script:Cfg.SocialVk })
+  $w.FindName('btnDzen').Add_Click({     Start-Process $Script:Cfg.SocialDzen })
+  $w.FindName('btnCopyCard').Add_Click({
+    # В буфер кладём номер без пробелов — его удобно вставить в банковское приложение
+    try {
+      Set-Clipboard -Value ($Script:Cfg.DonateSber -replace '\D', '')
+      $Script:AboutWindow.FindName('lblCopyState').Visibility = 'Visible'
+    } catch {}
+  })
+  # Как у остальных окон: обработчик через переменную скрипта (GetNewClosure не работает
+  # с функциями скрипта), Mica/тёмный заголовок — после появления HWND
+  $Script:AboutWindow = $w
+  $w.Add_SourceInitialized({ [void](Enable-FluentChrome $Script:AboutWindow) })
   $w.ShowDialog() | Out-Null
 }
 
@@ -1514,6 +1656,7 @@ $Script:Window.FindName('btnLang').Add_Click({
 })
 $Script:BtnInstall.Add_Click({ Start-FullInstall })
 $Script:Window.FindName('btnAdvanced').Add_Click({ Show-AdvancedWindow })
+$Script:Window.FindName('btnAbout').Add_Click({ Show-AboutWindow })
 $Script:Window.FindName('btnOpenConfig').Add_Click({
   $d = $Script:Cfg.ConfigDir
   if (-not (Test-Path $d)) { New-Item $d -ItemType Directory -Force | Out-Null }
