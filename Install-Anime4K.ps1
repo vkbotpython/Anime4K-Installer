@@ -17,13 +17,18 @@
   Тихая установка без UI: -Silent -Preset Low|High
 .PARAMETER Preset
   Пресет для Silent-режима. По умолчанию High.
+.PARAMETER Elevated
+  Служебный флаг: установщик сам ставит его, перезапускаясь с повышением прав.
+  Нужен, чтобы не уйти в цепочку перезапусков, если UAC права не выдал.
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -STA -File .\Install-Anime4K.ps1
   powershell -ExecutionPolicy Bypass -STA -File .\Install-Anime4K.ps1 -Silent -Preset Low
 #>
 param(
   [switch]$Silent,
-  [ValidateSet('Low','High')][string]$Preset = 'High'
+  [ValidateSet('Low','High')][string]$Preset = 'High',
+  # Ставится из Restart-Self: это уже перезапущенный (повышенный) экземпляр
+  [switch]$Elevated
 )
 
 #Requires -Version 5.1
@@ -52,6 +57,12 @@ $Script:Cfg = @{
   LogFile          = (Join-Path $env:TEMP 'Anime4K-Install.log')
 }
 $Script:Lang = 'RU'
+# Путь к самому файлу скрипта — нужен перезапуску (STA и повышение прав).
+# Внутри функций $MyInvocation указывает уже на функцию, поэтому фиксируем здесь.
+$Script:SelfPath = if ($PSCommandPath) { $PSCommandPath }
+  elseif ($MyInvocation.MyCommand.Path) { $MyInvocation.MyCommand.Path } else { '' }
+# Идёт перезапуск: пока новый экземпляр поднимается, старый не должен ничего начинать
+$Script:Restarting = $false
 # UI-хендлы объявляем заранее: в -Silent их нет, а StrictMode бросает на необъявленных переменных
 $Script:TxtLog = $null
 $Script:LogBrushes = @{}
@@ -117,6 +128,43 @@ function Write-Log {
 function Test-IsAdmin {
   $id = [Security.Principal.WindowsIdentity]::GetCurrent()
   ([Security.Principal.WindowsPrincipal]$id).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+# ------------------------------------------------- Перезапуск себя ---
+# Единственная точка перезапуска: STA-режим и повышение прав.
+# Раньше оба места плодили окна и процессы: старый экземпляр продолжал работать
+# (кнопка снова активна => каждый клик рождал ещё один elevated powershell),
+# а повышенный powershell всегда получает СВОЮ консоль и висел отдельным окном.
+# Теперь консоль нового elevated-процесса скрыта, а вызывающий код закрывает себя.
+function Get-SelfPath {
+  if (-not $Script:SelfPath) { return $null }
+  try { return (Resolve-Path -LiteralPath $Script:SelfPath -ErrorAction Stop).Path } catch { return $null }
+}
+
+function Restart-Self {
+  param(
+    [ValidateSet('Low','High')][string]$Preset = 'High',
+    [switch]$Elevated
+  )
+  $me = Get-SelfPath
+  # Без файла на диске перезапуск невозможен (запуск вида irm ... | iex)
+  if (-not $me) { throw (T NoSelfPath) }
+  $common = '-NoProfile -ExecutionPolicy Bypass -STA -File "{0}" -Preset {1}' -f $me, $Preset
+  if ($Elevated) {
+    $psi = New-Object Diagnostics.ProcessStartInfo
+    $psi.FileName        = 'powershell.exe'
+    # -WindowStyle Hidden: у elevated-процесса своя консоль, без флага она остаётся окном.
+    # -Elevated: помечаем нового себя, чтобы при отказе UAC не уйти в цепочку перезапусков
+    $psi.Arguments       = '-WindowStyle Hidden ' + $common + ' -Elevated'
+    # Verb=runas работает только с UseShellExecute=$true (в .NET 5+ по умолчанию false)
+    $psi.UseShellExecute = $true
+    $psi.WindowStyle     = [Diagnostics.ProcessWindowStyle]::Hidden
+    $psi.Verb            = 'runas'
+    return [Diagnostics.Process]::Start($psi)
+  }
+  # Без повышения наследуем текущую консоль (нового окна не появляется вообще),
+  # но не блокируем её, как делал прежний вызов через & powershell.exe
+  return Start-Process -FilePath 'powershell.exe' -ArgumentList $common -NoNewWindow -PassThru
 }
 
 # ------------------------------------------------- Detection: mpv.net ---
@@ -1237,6 +1285,8 @@ $Script:T = @{
     AdminMsg    = "Для системной установки mpv.net и .NET Runtime нужны права администратора.`n`nПерезапустить скрипт с повышением?"
     AdminStatus = 'Нужны права администратора. Перезапустите от имени администратора.'
     AdminLog    = 'Нет прав администратора — установка остановлена.'
+    AdminRestart = 'Перезапуск с правами администратора: текущее окно закрывается, установка продолжится в новом окне.'
+    NoSelfPath  = 'Не удалось определить путь к файлу скрипта, поэтому перезапуск невозможен. Запустите установщик как файл: powershell -ExecutionPolicy Bypass -STA -File .\Install-Anime4K.ps1'
     StDetect    = 'Определение последней версии mpv.net…'
     StInstMpv   = 'Установка mpv.net системно (тихо)…'
     StDlNet     = 'Скачивание .NET Desktop Runtime 10.0.13…'
@@ -1309,6 +1359,8 @@ $Script:T = @{
     AdminMsg    = "System-wide install of mpv.net and .NET Runtime requires administrator rights.`n`nRelaunch the script elevated?"
     AdminStatus = 'Administrator rights required. Please relaunch as administrator.'
     AdminLog    = 'No administrator rights — install aborted.'
+    AdminRestart = 'Relaunching elevated: this window closes, the install continues in a new window.'
+    NoSelfPath  = 'Could not determine the script file path, so relaunch is impossible. Run the installer as a file: powershell -ExecutionPolicy Bypass -STA -File .\Install-Anime4K.ps1'
     StDetect    = 'Resolving latest mpv.net version…'
     StInstMpv   = 'Installing mpv.net system-wide (silent)…'
     StDlNet     = 'Downloading .NET Desktop Runtime 10.0.13…'
@@ -1573,20 +1625,43 @@ function Show-AboutWindow {
 
 # ------------------------------------------------- Главная процедура установки (UI-поток) ---
 function Start-FullInstall {
+  if ($Script:Restarting) { return }  # новый экземпляр уже поднимается
   $which = if ($Script:RbLow.IsChecked) { 'Low' } else { 'High' }
   $Script:BtnInstall.IsEnabled = $false
   $Script:Bar.IsIndeterminate = $false
   try { $Script:Bar.Foreground = $Script:Window.FindResource('B_Accent') } catch {}
   try {
     if (-not (Test-IsAdmin)) {
+      # Уже перезапускались с повышением, но прав нет — окна больше не плодим
+      if ($Elevated) {
+        Write-Log $(T AdminLog) 'WARN'
+        $Script:LblStatus.Text = T AdminStatus
+        [Windows.MessageBox]::Show($(T AdminStatus), $(T AdminTitle), 'OK', 'Warning') | Out-Null
+        return
+      }
       $r = [Windows.MessageBox]::Show($(T AdminMsg), $(T AdminTitle), 'YesNo', 'Warning')
       if ($r -eq 'Yes') {
-        $psi = New-Object Diagnostics.ProcessStartInfo
-        $psi.FileName = 'powershell.exe'
-        $me = if ($PSCommandPath) { $PSCommandPath } else { $MyInvocation.MyCommand.Path }
-        $psi.Arguments = "-ExecutionPolicy Bypass -STA -File `"$me`""
-        $psi.Verb = 'runas'
-        [Diagnostics.Process]::Start($psi) | Out-Null
+        # Запуск вида irm ... | iex: файла на диске нет, перезапускать нечего
+        if (-not (Get-SelfPath)) {
+          Write-Log $(T NoSelfPath) 'ERROR'
+          $Script:LblStatus.Text = T AdminStatus
+          [Windows.MessageBox]::Show($(T NoSelfPath), $(T AdminTitle), 'OK', 'Error') | Out-Null
+          return
+        }
+        try {
+          [void](Restart-Self -Elevated -Preset $which)
+          $Script:Restarting = $true
+          Write-Log $(T AdminRestart) 'WARN'
+          # Старый (непривилегированный) экземпляр закрываем: иначе рядом с новым
+          # окном висит его окно и консоль, а клик по кнопке поднимает ещё один процесс
+          $Script:Window.Close()
+          return
+        } catch {
+          # UAC отклонён / запуск не удался — продолжаем работать в этом же окне
+          Write-Log ("Elevation failed: {0}" -f $_.Exception.Message) 'ERROR'
+          $Script:LblStatus.Text = T AdminStatus
+          return
+        }
       }
       Write-Log $(T AdminLog) 'WARN'
       $Script:LblStatus.Text = T AdminStatus
@@ -1663,7 +1738,8 @@ function Start-FullInstall {
       $(T ErrTitle), 'OK', 'Error') | Out-Null
   } finally {
     $Script:Bar.IsIndeterminate = $false
-    $Script:BtnInstall.IsEnabled = $true
+    # при перезапуске кнопку не возвращаем: окно уже закрывается
+    if (-not $Script:Restarting) { $Script:BtnInstall.IsEnabled = $true }
   }
 }
 
@@ -1698,8 +1774,13 @@ if ($Silent) {
 # WPF требует STA
 if ([Threading.Thread]::CurrentThread.ApartmentState -ne 'STA') {
   Write-Host 'Перезапуск в STA-режиме для WPF…'
-  $me = if ($PSCommandPath) { $PSCommandPath } else { $MyInvocation.MyCommand.Path }
-  & powershell.exe -ExecutionPolicy Bypass -STA -File "$me" -Preset $Preset
+  try {
+    # Отдельный STA-процесс в текущей консоли (см. Restart-Self): прежний вызов
+    # & powershell.exe ждал его и в хостах без консоли открывал второе окно
+    [void](Restart-Self -Preset $Preset)
+  } catch {
+    Write-Host $_.Exception.Message
+  }
   return
 }
 
