@@ -839,7 +839,7 @@ $Script:ScrollBarXaml = @'
 $Script:MainXaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="mpv.net + Anime4K — Установщик" Height="900" Width="1100"
+        Title="mpv.net + Anime4K — Установщик" Height="915" Width="1100"
         MinHeight="600" MinWidth="820" WindowStartupLocation="CenterScreen"
         ResizeMode="CanMinimize"
         Background="Transparent" Foreground="#E6E6E6" FontFamily="Segoe UI Variable, Segoe UI" FontSize="14">
@@ -949,7 +949,7 @@ $Script:MainXaml = @'
     </ControlTemplate>
     <ControlTemplate x:Key="TplPrimary" TargetType="Button">
       <Border x:Name="b" Background="{TemplateBinding Background}"
-              CornerRadius="4" Padding="{TemplateBinding Padding}">
+              CornerRadius="8" Padding="{TemplateBinding Padding}">
         <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
       </Border>
       <ControlTemplate.Triggers>
@@ -1264,9 +1264,41 @@ $Script:MainXaml = @'
 
       <!-- Step 3: установка -->
       <TextBlock x:Name="txtStep3" Style="{StaticResource H2}" Text="Шаг 3 — Установка"/>
-      <Button x:Name="btnInstall" Style="{StaticResource PrimaryButton}" Content="Установить / Обновить всё" Height="46"/>
-      <ProgressBar x:Name="progressBar" Style="{StaticResource FluentProgress}" Margin="0,10,0,6" Minimum="0" Maximum="100" Value="0"/>
-      <TextBlock x:Name="txtStatus" Style="{StaticResource Muted}" Text="Готов. Выберите пресет и нажмите «Установить»."/>
+      <!-- Одно главное действие: слева — что именно будет сделано, справа — кнопка.
+           Подпись, иконку и пояснение обновляет Update-InstallAction по результатам
+           проверки, поэтому кнопка не обещает «всё», когда часть уже установлена. -->
+      <Border Background="{StaticResource B_Card}" BorderBrush="{StaticResource B_Border}"
+              BorderThickness="1" CornerRadius="10" Padding="14,10" Margin="0,0,0,10">
+        <Grid>
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="Auto"/>
+            <ColumnDefinition Width="*"/>
+            <ColumnDefinition Width="Auto"/>
+          </Grid.ColumnDefinitions>
+          <Border Width="36" Height="36" CornerRadius="18" Background="#2460CDFF"
+                  VerticalAlignment="Center" Margin="0,0,12,0">
+            <TextBlock x:Name="icoInstallPlan" FontFamily="{StaticResource F_Icons}" FontSize="16"
+                       Foreground="{StaticResource B_Accent}" Text="&#xE7B8;"
+                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
+          </Border>
+          <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="0,0,16,0">
+            <TextBlock x:Name="txtInstallTitle" Text="Нужна установка" FontSize="14" FontWeight="SemiBold"/>
+            <TextBlock x:Name="txtInstallHint" Style="{StaticResource Muted}" Margin="0,3,0,0"
+                       Text="Устанавливаются только отсутствующие компоненты, пресет копируется заново."/>
+          </StackPanel>
+          <Button x:Name="btnInstall" Grid.Column="2" Style="{StaticResource PrimaryButton}"
+                  Height="46" MinWidth="248" Padding="18,0" VerticalAlignment="Center"
+                  ToolTip="Установить недостающие компоненты и развернуть выбранный пресет">
+            <StackPanel Orientation="Horizontal">
+              <TextBlock x:Name="icoInstall" FontFamily="{StaticResource F_Icons}" FontSize="15"
+                         Text="&#xE896;" VerticalAlignment="Center" Margin="0,0,10,0"/>
+              <TextBlock x:Name="txtInstallBtn" Text="Установить всё" VerticalAlignment="Center"/>
+            </StackPanel>
+          </Button>
+        </Grid>
+      </Border>
+      <ProgressBar x:Name="progressBar" Style="{StaticResource FluentProgress}" Margin="0,0,0,6" Minimum="0" Maximum="100" Value="0"/>
+      <TextBlock x:Name="txtStatus" Style="{StaticResource Muted}" Text="Готов. Выберите пресет и нажмите кнопку установки."/>
       <Expander x:Name="expLog" Style="{StaticResource LogExpander}" Header="Логи" IsExpanded="False">
         <RichTextBox x:Name="txtLog" Height="124" Style="{StaticResource LogConsole}">
           <FlowDocument PagePadding="0" LineHeight="18"/>
@@ -1667,8 +1699,22 @@ $Script:T = @{
     PstUnknown  = 'Установленные шейдеры не совпадают с шаблонами Low/High — mpv.conf мог быть изменён вручную.'
     PstLog      = 'Состояние шейдеров до установки: {0}'
     Step3       = 'Шаг 3 — Установка'
-    InstallBtn  = '⬇ Установить / Обновить всё'
-    Ready       = 'Готов. Выберите пресет и нажмите «Установить».'
+    PlanTitleInstall = 'Нужна установка'
+    PlanTitleReady   = 'Всё уже установлено'
+    PlanTitleSwitch  = 'Выбран другой пресет'
+    PlanTitleUnknown = 'Шейдеры изменены вручную'
+    PlanMissing      = 'Будет установлено: {0}.'
+    PlanDeploy       = 'Пресет {0} будет развёрнут в mpv.net.'
+    PlanSwitch       = 'Сейчас установлен {1}; будет развёрнут {0}.'
+    PlanUnknown      = 'Шейдеры изменены вручную; будет развёрнут пресет {0}.'
+    PlanUpdate       = 'Пресет {0} уже установлен — файлы будут перезаписаны свежей копией.'
+    BtnInstallAll    = 'Установить всё'
+    BtnInstallMissing = 'Установить недостающее'
+    BtnDeploy        = 'Развернуть пресет'
+    BtnUpdate        = 'Обновить пресет'
+    BtnInstalling    = 'Установка…'
+    InstallTip       = 'Установить недостающие компоненты и развернуть выбранный пресет'
+    Ready       = 'Готов. Выберите пресет и нажмите кнопку установки.'
     LogHeader   = 'Логи'
     QuickTitle  = 'Quick Usage — как пользоваться Anime4K'
     QuickSub    = 'Mode A включён автоматически (так задано в mpv.conf из шаблона). Вручную:'
@@ -1749,8 +1795,22 @@ $Script:T = @{
     PstUnknown  = 'Installed shaders do not match the Low/High templates — mpv.conf may have been edited manually.'
     PstLog      = 'Shader state before install: {0}'
     Step3       = 'Step 3 — Install'
-    InstallBtn  = '⬇ Install / Update all'
-    Ready       = 'Ready. Select a preset and click Install.'
+    PlanTitleInstall = 'Installation required'
+    PlanTitleReady   = 'Everything is already installed'
+    PlanTitleSwitch  = 'A different preset is selected'
+    PlanTitleUnknown = 'Shaders were modified manually'
+    PlanMissing      = 'Will be installed: {0}.'
+    PlanDeploy       = 'Preset {0} will be deployed to mpv.net.'
+    PlanSwitch       = 'Currently installed: {1}; will be deployed: {0}.'
+    PlanUnknown      = 'Shaders were modified manually; preset {0} will be deployed.'
+    PlanUpdate       = 'Preset {0} is already installed — files will be overwritten with a fresh copy.'
+    BtnInstallAll    = 'Install all'
+    BtnInstallMissing = 'Install missing'
+    BtnDeploy        = 'Deploy preset'
+    BtnUpdate        = 'Update preset'
+    BtnInstalling    = 'Installing…'
+    InstallTip       = 'Install missing components and deploy the selected preset'
+    Ready       = 'Ready. Select a preset and click the install button.'
     LogHeader   = 'Log'
     QuickTitle  = 'Quick Usage — how to use Anime4K'
     QuickSub    = 'Mode A is enabled automatically (as set in the template mpv.conf). Manually:'
@@ -1851,7 +1911,8 @@ function Set-Language {
   $w.FindName('txtHighDesc').Text    = T HighDesc
   $w.FindName('txtShaderNote').Text  = T ShaderNote
   $w.FindName('txtStep3').Text       = T Step3
-  $Script:BtnInstall.Content         = T InstallBtn
+  # Подпись главной кнопки не фиксированная: её вместе с пояснением обновляет
+  # Update-InstallAction (вызывается из Update-StatusUI ниже) по текущему состоянию.
   $w.FindName('expLog').Header       = T LogHeader
   $w.FindName('txtQuickTitle').Text  = T QuickTitle
   $w.FindName('txtQuickSub').Text    = T QuickSub
@@ -2350,7 +2411,7 @@ function Show-StyledDialog {
     </ControlTemplate>
     <ControlTemplate x:Key="TplPrimary" TargetType="Button">
       <Border x:Name="b" Background="{TemplateBinding Background}"
-              CornerRadius="4" Padding="{TemplateBinding Padding}">
+              CornerRadius="8" Padding="{TemplateBinding Padding}">
         <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
       </Border>
       <ControlTemplate.Triggers>
@@ -2644,6 +2705,64 @@ function Show-RecheckFeedback {
   $Script:RecheckTimer.Start()
 }
 
+# План установки у главной кнопки: вместо безликого «Установить / Обновить всё»
+# показываем реальное действие — доустановить недостающее, развернуть другой
+# пресет или просто обновить уже установленный. Так кнопка не врёт, когда часть
+# компонентов уже стоит, и пользователь понимает последствия клика до него.
+function Update-InstallAction {
+  if (-not $Script:TxtInstallBtn -or -not $Script:RbLow -or -not $Script:RbHigh) { return }
+  $Script:BtnInstall.ToolTip = T InstallTip
+  if ($Script:InstallRunning) { $Script:TxtInstallBtn.Text = T BtnInstalling; return }
+
+  $mpvOk = [bool](Get-MpvNetStatus).Installed
+  $dnOk  = [bool](Get-DotnetStatus).Installed
+  $pst   = Get-AnimePresetStatus
+  $which = if ($Script:RbLow -and $Script:RbLow.IsChecked) { 'Low' } else { 'High' }
+  $name  = [string]$Script:RbHigh.Content
+  if ($which -eq 'Low') { $name = [string]$Script:RbLow.Content }
+  $curName = ''
+  if ($pst.State -eq 'Low') { $curName = [string]$Script:RbLow.Content }
+  elseif ($pst.State -eq 'High') { $curName = [string]$Script:RbHigh.Content }
+
+  $missing = @()
+  if (-not $mpvOk) { $missing += 'mpv.net' }
+  if (-not $dnOk) { $missing += '.NET 10' }
+
+  if ($missing.Count -gt 0) {
+    $Script:TxtInstallTitle.Text = T PlanTitleInstall
+    $hint = (T PlanMissing) -f ($missing -join ', ')
+    if ($pst.State -ne $which) { $hint += ' ' + ((T PlanDeploy) -f $name) }
+    $Script:TxtInstallHint.Text = $hint
+    # «Установить всё» — только когда не стоит вообще ничего и пресет тоже чужой
+    $btnText = T BtnInstallMissing
+    if ($missing.Count -eq 2 -and $pst.State -ne $which) { $btnText = T BtnInstallAll }
+    $Script:TxtInstallBtn.Text = $btnText
+    $Script:IcoInstall.Text = [string][char]0xE896
+    return
+  }
+
+  if ($pst.State -eq $which) {
+    $Script:TxtInstallTitle.Text = T PlanTitleReady
+    $Script:TxtInstallHint.Text  = (T PlanUpdate) -f $name
+    $Script:TxtInstallBtn.Text   = T BtnUpdate
+    $Script:IcoInstall.Text      = [string][char]0xE895
+    return
+  }
+
+  $Script:TxtInstallTitle.Text = T PlanTitleInstall
+  $hint = (T PlanDeploy) -f $name
+  if ($pst.State -eq 'Unknown') {
+    $Script:TxtInstallTitle.Text = T PlanTitleUnknown
+    $hint = (T PlanUnknown) -f $name
+  } elseif ($pst.State -eq 'Low' -or $pst.State -eq 'High') {
+    $Script:TxtInstallTitle.Text = T PlanTitleSwitch
+    $hint = (T PlanSwitch) -f $name, $curName
+  }
+  $Script:TxtInstallHint.Text = $hint
+  $Script:TxtInstallBtn.Text = T BtnDeploy
+  $Script:IcoInstall.Text    = [string][char]0xE896
+}
+
 function Update-StatusUI {
   param([switch]$Notify, [switch]$Force)
   $mpv = Get-MpvNetStatus -Force:$Force
@@ -2675,6 +2794,7 @@ function Update-StatusUI {
     'Unknown' { $warn }
     default   { $bad }
   }
+  Update-InstallAction
   if ($Notify) { Show-RecheckFeedback }
 }
 
@@ -2746,6 +2866,11 @@ function Start-FullInstall {
   $which = if ($Script:RbLow.IsChecked) { 'Low' } else { 'High' }
   $Script:InstallRunning = $true
   $Script:BtnInstall.IsEnabled = $false
+  # Пресет фиксируется в $which до старта — переключать его во время установки
+  # бессмысленно, поэтому блокируем выбор до завершения.
+  $Script:RbLow.IsEnabled  = $false
+  $Script:RbHigh.IsEnabled = $false
+  $Script:TxtInstallBtn.Text = T BtnInstalling
   $Script:Bar.IsIndeterminate = $false
   try { $Script:Bar.Foreground = $Script:Window.FindResource('B_Accent') } catch {}
   $work = $null
@@ -2868,7 +2993,13 @@ function Start-FullInstall {
     $Script:InstallRunning = $false
     $Script:Bar.IsIndeterminate = $false
     # при перезапуске кнопку не возвращаем: окно уже закрывается
-    if (-not $Script:Restarting) { $Script:BtnInstall.IsEnabled = $true }
+    if (-not $Script:Restarting) {
+      $Script:RbLow.IsEnabled  = $true
+      $Script:RbHigh.IsEnabled = $true
+      $Script:BtnInstall.IsEnabled = $true
+      # Кнопка снова показывает реальный план: после установки это «Обновить пресет»
+      Update-InstallAction
+    }
   }
 }
 
@@ -2955,11 +3086,19 @@ $Script:DotPreset = $Script:Window.FindName('dotPreset')
 $Script:RbLow     = $Script:Window.FindName('rbLow')
 $Script:RbHigh    = $Script:Window.FindName('rbHigh')
 $Script:BtnInstall = $Script:Window.FindName('btnInstall')
+$Script:TxtInstallBtn   = $Script:Window.FindName('txtInstallBtn')
+$Script:TxtInstallTitle = $Script:Window.FindName('txtInstallTitle')
+$Script:TxtInstallHint  = $Script:Window.FindName('txtInstallHint')
+$Script:IcoInstall      = $Script:Window.FindName('icoInstall')
 $Script:Bar       = $Script:Window.FindName('progressBar')
 $Script:LblStatus = $Script:Window.FindName('txtStatus')
 $Script:TxtLog    = $Script:Window.FindName('txtLog')
 
 if ($Preset -eq 'Low') { $Script:RbLow.IsChecked = $true } else { $Script:RbHigh.IsChecked = $true }
+# Смена пресета меняет и план у кнопки (например, «Развернуть пресет», а не
+# «Обновить пресет»), поэтому пересчитываем подпись сразу после выбора.
+$Script:RbLow.Add_Checked({ Update-InstallAction })
+$Script:RbHigh.Add_Checked({ Update-InstallAction })
 
 $Script:Window.FindName('btnRecheck').Add_Click({ Update-StatusUI -Notify -Force })
 # RadioButton сам держит взаимоисключение (GroupName=Lang); Set-Language лишь
