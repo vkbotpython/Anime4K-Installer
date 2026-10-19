@@ -2,9 +2,9 @@
 .SYNOPSIS
   mpv.net + Anime4K — современный однофайловый установщик (WPF, чистый PowerShell).
 .DESCRIPTION
-  - Ставит mpv.net СИСТЕМНО через setup (mpv.net-vX-setup-x64.exe, Inno Setup, /ALLUSERS).
-    Проверяет установлен ли уже (реестр uninstall + %ProgramFiles%\mpv.net\mpvnet.exe),
-    версию latest берет из GitHub API, fallback — v7.1.2.0.
+  - Ставит mpv.net СИСТЕМНО через setup (mpv.net-vX-setup-x64.exe, Inno Setup, /ALLUSERS),
+    только если он ещё не найден (реестр uninstall + PATH + стандартные папки).
+    Версию latest берёт из GitHub API, fallback — v7.1.2.0.
   - Ставит зависимость .NET WindowsDesktop Runtime 10.0.13 x64 (тихо, /quiet).
   - Создает %APPDATA%\mpv.net и распаковывает туда пресет Anime4K v4.0.1
     (Low-end / High-end). Приоритет/порядок шейдеров НЕ правится вручную —
@@ -23,6 +23,9 @@
 .PARAMETER Elevated
   Служебный флаг: установщик сам ставит его, перезапускаясь с повышением прав.
   Нужен, чтобы не уйти в цепочку перезапусков, если UAC права не выдал.
+.PARAMETER TargetAppData
+  Служебный флаг: исходный %APPDATA% пользователя. Передаётся при перезапуске,
+  чтобы пресет Anime4K не уехал в профиль другого администратора при UAC.
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -STA -File .\Install-Anime4K.ps1
   powershell -ExecutionPolicy Bypass -STA -File .\Install-Anime4K.ps1 -Silent -Preset Low
@@ -31,15 +34,21 @@ param(
   [switch]$Silent,
   [ValidateSet('Low','High')][string]$Preset = 'High',
   # Ставится из Restart-Self: это уже перезапущенный (повышенный) экземпляр
-  [switch]$Elevated
+  [switch]$Elevated,
+  # Исходный %APPDATA% пользователя. Нужен, если UAC повышает права под другой
+  # учётной записью: иначе пресет попадёт в профиль администратора.
+  [string]$TargetAppData = ''
 )
 
 #Requires -Version 5.1
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+try { Add-Type -AssemblyName System.Net.Http -ErrorAction Stop } catch {}
 
 # ---------------------------------------------------------------- Config ---
+$Script:TargetAppData = if ($TargetAppData) { $TargetAppData } else { $env:APPDATA }
 $Script:Cfg = @{
   MpvPinnedVersion = 'v7.1.2.0'
   MpvPinnedUrl     = 'https://github.com/mpvnet-player/mpv.net/releases/download/v7.1.2.0/mpv.net-v7.1.2.0-setup-x64.exe'
@@ -56,7 +65,7 @@ $Script:Cfg = @{
   SocialVk         = 'https://vk.ru/avencoresreuploads'
   SocialDzen       = 'https://dzen.ru/avencores'
   DonateSber       = '2202 2050 1464 4675'
-  ConfigDir        = (Join-Path $env:APPDATA 'mpv.net')
+  ConfigDir        = (Join-Path $Script:TargetAppData 'mpv.net')
   LogFile          = (Join-Path $env:TEMP 'Anime4K-Install.log')
 }
 $Script:Lang = 'RU'
@@ -66,7 +75,9 @@ $Script:SelfPath = if ($PSCommandPath) { $PSCommandPath }
   elseif ($MyInvocation.MyCommand.Path) { $MyInvocation.MyCommand.Path } else { '' }
 # Идёт перезапуск: пока новый экземпляр поднимается, старый не должен ничего начинать
 $Script:Restarting = $false
+$Script:InstallRunning = $false
 # UI-хендлы объявляем заранее: в -Silent их нет, а StrictMode бросает на необъявленных переменных
+$Script:Window = $null
 $Script:TxtLog = $null
 $Script:LogBrushes = @{}
 $Script:Bar = $null
@@ -87,6 +98,18 @@ $Script:RecheckTimer = $null
 $Script:RecheckText = $null
 # Иконка приложения: DrawingImage собирается один раз и раздаётся всем окнам
 $Script:AppIcon = $null
+# Кэши детекта: не сканируем реестр/диск заново при каждой смене языка
+$Script:MpvStatusCache = $null
+$Script:DotnetStatusCache = $null
+$Script:AnimePresetCache = $null
+# Кэш Mica/сборки Windows — реестр читается один раз за запуск
+$Script:WindowsBuild = $null
+$Script:MicaUsable = $null
+# Открытый лог-файл (StreamWriter): Add-Content на каждую строку слишком дорог
+$Script:LogWriter = $null
+# Насос сообщений WPF: используется во время скачивания/ожидания процессов
+$Script:UiPumpFrame = $null
+$Script:UiPumpTimer = $null
 
 # Кисти строк лога кэшируем: цвета берём из палитры окна, при отсутствии — фолбэк
 function Get-LogBrush {
@@ -101,11 +124,92 @@ function Get-LogBrush {
   return $b
 }
 
+# ------------------------------------------------------------- Log / UI pump ---
+function Initialize-LogWriter {
+  if ($Script:LogWriter) { return }
+  try {
+    $dir = Split-Path -Path $Script:Cfg.LogFile -Parent
+    if ($dir -and -not (Test-Path -LiteralPath $dir)) {
+      New-Item -Path $dir -ItemType Directory -Force | Out-Null
+    }
+    $enc = New-Object System.Text.UTF8Encoding -ArgumentList $false
+    $Script:LogWriter = New-Object System.IO.StreamWriter -ArgumentList @($Script:Cfg.LogFile, $true, $enc)
+    $Script:LogWriter.AutoFlush = $true
+  } catch {
+    $Script:LogWriter = $null
+  }
+}
+
+function Close-LogWriter {
+  if ($Script:LogWriter) {
+    try { $Script:LogWriter.Flush() } catch {}
+    try { $Script:LogWriter.Dispose() } catch {}
+    $Script:LogWriter = $null
+  }
+}
+
+function Invoke-UiPump {
+  # Прокачивает очередь сообщений WPF на время долгой операции.
+  # Dispatcher.Invoke([action]{}) из UI-потока этого НЕ делает.
+  param([int]$Ms = 30)
+  if ([Threading.Thread]::CurrentThread.GetApartmentState() -ne 'STA') { return }
+  if ($Script:UiPumpFrame) { return }  # без вложенных насосов
+  $Script:UiPumpFrame = New-Object Windows.Threading.DispatcherFrame
+  $Script:UiPumpTimer = New-Object Windows.Threading.DispatcherTimer
+  $Script:UiPumpTimer.Interval = [TimeSpan]::FromMilliseconds([Math]::Max(1, $Ms))
+  $Script:UiPumpTimer.Add_Tick({
+    if ($Script:UiPumpTimer) { $Script:UiPumpTimer.Stop() }
+    if ($Script:UiPumpFrame) { $Script:UiPumpFrame.Continue = $false }
+  })
+  $Script:UiPumpTimer.Start()
+  try {
+    [Windows.Threading.Dispatcher]::PushFrame($Script:UiPumpFrame)
+  } finally {
+    if ($Script:UiPumpTimer) { try { $Script:UiPumpTimer.Stop() } catch {} }
+    $Script:UiPumpFrame = $null
+    $Script:UiPumpTimer = $null
+  }
+}
+
+function Wait-UiSlice {
+  # В UI-режиме отдаём время сообщениям, в silent — обычный Sleep.
+  # Если насос уже работает (вложенный вызов из обработчика), не крутим
+  # вложенный DispatcherFrame — просто спим, чтобы не сжечь CPU.
+  param([int]$Milliseconds = 20)
+  if ($Script:Window -and [Threading.Thread]::CurrentThread.GetApartmentState() -eq 'STA' -and -not $Script:UiPumpFrame) {
+    Invoke-UiPump -Ms $Milliseconds
+  } else {
+    Start-Sleep -Milliseconds $Milliseconds
+  }
+}
+
+function Wait-UiTask {
+  # Ждёт .NET Task, не блокируя WPF: пока задача не готова, крутим DispatcherFrame.
+  param([Parameter(Mandatory)]$Task)
+  if ($null -eq $Task) { return $null }
+  if ($Script:Window -and [Threading.Thread]::CurrentThread.GetApartmentState() -eq 'STA') {
+    while (-not $Task.IsCompleted) {
+      if ($Script:UiPumpFrame) { Start-Sleep -Milliseconds 15 }
+      else { Invoke-UiPump -Ms 30 }
+    }
+  }
+  return $Task.GetAwaiter().GetResult()
+}
+
+function New-TempDir {
+  $d = Join-Path $env:TEMP ('Anime4K-' + [Guid]::NewGuid().ToString('N'))
+  New-Item -Path $d -ItemType Directory -Force | Out-Null
+  return $d
+}
+
 function Write-Log {
   param([string]$Message, [string]$Level = 'INFO')
   $ts = Get-Date -Format 'HH:mm:ss'
   $line = '[{0}] [{1}] {2}' -f $ts, $Level, $Message
-  try { Add-Content -Path $Script:Cfg.LogFile -Value $line -Encoding UTF8 } catch {}
+  Initialize-LogWriter
+  if ($Script:LogWriter) {
+    try { $Script:LogWriter.WriteLine($line) } catch {}
+  }
   if ($Script:TxtLog) {
     try {
       $Script:TxtLog.Dispatcher.Invoke([action]{
@@ -143,6 +247,12 @@ function Test-IsAdmin {
   ([Security.Principal.WindowsPrincipal]$id).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
+function Assert-64BitWindows {
+  if (-not [Environment]::Is64BitOperatingSystem) {
+    throw 'Установщик требует 64-битную Windows.'
+  }
+}
+
 # ------------------------------------------------- Перезапуск себя ---
 # Единственная точка перезапуска: STA-режим и повышение прав.
 # Раньше оба места плодили окна и процессы: старый экземпляр продолжал работать
@@ -162,7 +272,9 @@ function Restart-Self {
   $me = Get-SelfPath
   # Без файла на диске перезапуск невозможен (запуск вида irm ... | iex)
   if (-not $me) { throw (T NoSelfPath) }
-  $common = '-NoProfile -ExecutionPolicy Bypass -STA -File "{0}" -Preset {1}' -f $me, $Preset
+  # Передаём исходный профиль: elevated-процесс под другой учёткой иначе
+  # получит чужой %APPDATA% и развернёт пресет не тому пользователю.
+  $common = '-NoProfile -ExecutionPolicy Bypass -STA -File "{0}" -Preset {1} -TargetAppData "{2}"' -f $me, $Preset, $Script:TargetAppData
   if ($Elevated) {
     $psi = New-Object Diagnostics.ProcessStartInfo
     $psi.FileName        = 'powershell.exe'
@@ -183,18 +295,43 @@ function Restart-Self {
 # ------------------------------------------------- Detection: mpv.net ---
 function Get-MpvNetStatus {
   # Возвращает @{ Installed=$bool; Version=$str; Exe=$path }
+  param([switch]$Force)
+  if (-not $Force -and $null -ne $Script:MpvStatusCache) { return $Script:MpvStatusCache }
+
   $res = @{ Installed = $false; Version = ''; Exe = '' }
-  $cands = @(
-    (Join-Path $env:ProgramFiles 'mpv.net\mpvnet.exe'),
-    (Join-Path ${env:ProgramFiles(x86)} 'mpv.net\mpvnet.exe'),
-    (Join-Path $env:LocalAppData 'mpv.net\mpvnet.exe')
-  )
+  # На 64-битной Windows из 32-битного PowerShell $env:ProgramFiles указывает
+  # на Program Files (x86), поэтому сначала берём ProgramW6432.
+  $pf64 = if ($env:ProgramW6432) { $env:ProgramW6432 } else { $env:ProgramFiles }
+  $pf86 = ${env:ProgramFiles(x86)}
+  $cands = @()
+  if ($pf64) { $cands += (Join-Path $pf64 'mpv.net\mpvnet.exe') }
+  if ($pf86) { $cands += (Join-Path $pf86 'mpv.net\mpvnet.exe') }
+  if ($env:LocalAppData) { $cands += (Join-Path $env:LocalAppData 'mpv.net\mpvnet.exe') }
+
   foreach ($p in $cands) {
-    if ($p -and (Test-Path $p)) { $res.Exe = $p; $res.Installed = $true; break }
+    if ($p -and (Test-Path -LiteralPath $p)) {
+      $res.Exe = $p
+      $res.Installed = $true
+      break
+    }
   }
-  $cmd = Get-Command mpvnet.exe -ErrorAction SilentlyContinue
-  if (-not $res.Installed -and $cmd) { $res.Exe = $cmd.Source; $res.Installed = $true }
-  # Реестр uninstall (системная установка через Inno Setup, ALLUSERS)
+  if (-not $res.Installed) {
+    $cmd = Get-Command mpvnet.exe -ErrorAction SilentlyContinue
+    if ($cmd -and $cmd.Source) { $res.Exe = $cmd.Source; $res.Installed = $true }
+  }
+  # Если exe уже найден, реестр не нужен: версию берём из файла.
+  # Это заметно быстрее полного обхода трёх веток Uninstall.
+  if ($res.Installed) {
+    if ($res.Exe) {
+      try { $res.Version = (Get-Item -LiteralPath $res.Exe).VersionInfo.FileVersion } catch {}
+    }
+    $Script:MpvStatusCache = $res
+    return $res
+  }
+
+  # Реестр uninstall (системная установка через Inno Setup, ALLUSERS).
+  # Свойства могут отсутствовать, поэтому под StrictMode читаем их через
+  # PSObject.Properties, а не напрямую.
   $keys = @(
     'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
     'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*',
@@ -202,65 +339,168 @@ function Get-MpvNetStatus {
   )
   foreach ($k in $keys) {
     try {
-      $apps = Get-ItemProperty $k -ErrorAction SilentlyContinue |
-        Where-Object { $_.DisplayName -like 'mpv.net*' }
+      $apps = Get-ItemProperty $k -ErrorAction SilentlyContinue | Where-Object {
+        $dn = $_.PSObject.Properties['DisplayName']
+        $dn -and $dn.Value -like 'mpv.net*'
+      }
       foreach ($a in $apps) {
         $res.Installed = $true
-        if ($a.DisplayVersion) { $res.Version = $a.DisplayVersion }
-        if (-not $res.Exe -and $a.InstallLocation) {
-          $e = Join-Path $a.InstallLocation 'mpvnet.exe'
-          if (Test-Path $e) { $res.Exe = $e }
+        $ver = $a.PSObject.Properties['DisplayVersion']
+        if ($ver -and $ver.Value) { $res.Version = [string]$ver.Value }
+        $loc = $a.PSObject.Properties['InstallLocation']
+        if (-not $res.Exe -and $loc -and $loc.Value) {
+          $e = Join-Path ([string]$loc.Value) 'mpvnet.exe'
+          if (Test-Path -LiteralPath $e) { $res.Exe = $e }
         }
       }
     } catch {}
   }
-  if ($res.Installed -and -not $res.Version -and $res.Exe -and (Test-Path $res.Exe)) {
-    try { $res.Version = (Get-Item $res.Exe).VersionInfo.FileVersion } catch {}
+  if ($res.Installed -and -not $res.Version -and $res.Exe -and (Test-Path -LiteralPath $res.Exe)) {
+    try { $res.Version = (Get-Item -LiteralPath $res.Exe).VersionInfo.FileVersion } catch {}
   }
+  $Script:MpvStatusCache = $res
   return $res
 }
 
 function Get-LatestMpvSetupUrl {
-  # Пытаемся взять latest через GitHub API (ассет *setup-x64.exe), иначе pinned 7.1.2.0
+  # Пытаемся взять latest через GitHub API (ассет *setup-x64.exe), иначе pinned 7.1.2.0.
+  # HttpClient + Wait-UiTask: запрос не блокирует окно, пока ждём ответ.
+  $client = $null
   try {
-    $rel = Invoke-RestMethod -Uri $Script:Cfg.MpvApiLatest `
-      -Headers @{ 'User-Agent' = 'Anime4K-Installer' } -TimeoutSec 20
-    $asset = $rel.assets | Where-Object { $_.name -like '*setup-x64.exe' } | Select-Object -First 1
+    $client = New-Object System.Net.Http.HttpClient
+    $client.Timeout = [TimeSpan]::FromSeconds(20)
+    $client.DefaultRequestHeaders.UserAgent.ParseAdd('Anime4K-Installer')
+    $task = $client.GetStringAsync($Script:Cfg.MpvApiLatest)
+    $json = Wait-UiTask $task
+    $rel = $json | ConvertFrom-Json
+    $asset = @($rel.assets) | Where-Object { $_.name -like '*setup-x64.exe' } | Select-Object -First 1
     if ($asset -and $asset.browser_download_url) {
-      return @{ Url = $asset.browser_download_url; Tag = $rel.tag_name; Name = $asset.name }
+      return @{
+        Url  = $asset.browser_download_url
+        Tag  = $rel.tag_name
+        Name = [IO.Path]::GetFileName([string]$asset.name)
+      }
     }
-  } catch { Write-Log "GitHub API недоступен, fallback на pinned: $_" 'WARN' }
+  } catch {
+    Write-Log "GitHub API недоступен, fallback на pinned: $($_.Exception.Message)" 'WARN'
+  } finally {
+    if ($client) { try { $client.Dispose() } catch {} }
+  }
   return @{
     Url  = $Script:Cfg.MpvPinnedUrl
     Tag  = $Script:Cfg.MpvPinnedVersion
-    Name = 'mpv.net-v7.1.2.0-setup-x64.exe'
+    Name = [IO.Path]::GetFileName($Script:Cfg.MpvPinnedUrl)
   }
 }
 
 # ------------------------------------------------- Detection: .NET ---
+function Test-DotnetVersion {
+  # Нужен тот же major/minor и версия не ниже указанной: 10.0.14 тоже подходит.
+  param([string]$Version, [version]$Want)
+  $v = $null
+  if (-not [version]::TryParse($Version, [ref]$v)) { return $false }
+  return ($v.Major -eq $Want.Major -and $v.Minor -eq $Want.Minor -and $v -ge $Want)
+}
+
+function Invoke-ProcessCapture {
+  # Запускает процесс с захватом stdout/stderr и не блокирует WPF.
+  param(
+    [Parameter(Mandatory)][string]$FilePath,
+    [string]$Arguments = '',
+    [int]$TimeoutSec = 20
+  )
+  $psi = New-Object Diagnostics.ProcessStartInfo
+  $psi.FileName = $FilePath
+  $psi.Arguments = $Arguments
+  $psi.UseShellExecute = $false
+  $psi.CreateNoWindow = $true
+  $psi.RedirectStandardOutput = $true
+  $psi.RedirectStandardError = $true
+  $p = [Diagnostics.Process]::Start($psi)
+  if (-not $p) { throw "Не удалось запустить процесс: $FilePath" }
+  try {
+    $outTask = $p.StandardOutput.ReadToEndAsync()
+    $errTask = $p.StandardError.ReadToEndAsync()
+    $sw = [Diagnostics.Stopwatch]::StartNew()
+    while (-not $p.HasExited) {
+      if ($sw.Elapsed.TotalSeconds -gt $TimeoutSec) {
+        try { $p.Kill() } catch {}
+        throw "Процесс превысил таймаут ${TimeoutSec}с: $FilePath"
+      }
+      Wait-UiSlice -Milliseconds 20
+    }
+    return @{
+      ExitCode = $p.ExitCode
+      Output   = [string](Wait-UiTask $outTask)
+      Error    = [string](Wait-UiTask $errTask)
+    }
+  } finally {
+    try { $p.Dispose() } catch {}
+  }
+}
+
 function Get-DotnetStatus {
+  param([switch]$Force)
+  if (-not $Force -and $null -ne $Script:DotnetStatusCache) { return $Script:DotnetStatusCache }
+
   $res = @{ Installed = $false; Detail = '' }
-  $want = $Script:Cfg.DotnetVersion
-  # 1) dotnet --list-runtimes
-  try {
-    $out = & dotnet --list-runtimes 2>$null
-    $line = $out | Where-Object { $_ -like "*Microsoft.WindowsDesktop.App $want*" } | Select-Object -First 1
-    if ($line) { $res.Installed = $true; $res.Detail = $line.Trim(); return $res }
-  } catch {}
-  # 2) папка shared fx
-  try {
-    $dir = Join-Path $env:ProgramFiles "dotnet\shared\Microsoft.WindowsDesktop.App\$want*"
-    $hit = Get-Item $dir -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($hit) { $res.Installed = $true; $res.Detail = $hit.FullName; return $res }
-  } catch {}
-  # 3) реестр dotnet: имена значений — установленные версии, их данные — пути к рантайму
+  $want = [version]$Script:Cfg.DotnetVersion
+
+  # 1) реестр dotnet — самый быстрый путь: имена значений и есть версии
   try {
     $r = Get-ItemProperty $Script:Cfg.DotnetRegPath -ErrorAction SilentlyContinue
     if ($r) {
-      $hit = $r.PSObject.Properties.Name | Where-Object { $_ -like "$want*" } | Select-Object -First 1
-      if ($hit) { $res.Installed = $true; $res.Detail = "Microsoft.WindowsDesktop.App $hit (registry)"; return $res }
+      $hit = @($r.PSObject.Properties.Name) |
+        Where-Object { Test-DotnetVersion $_ $want } |
+        Select-Object -First 1
+      if ($hit) {
+        $res.Installed = $true
+        $res.Detail = "Microsoft.WindowsDesktop.App $hit (registry)"
+        $Script:DotnetStatusCache = $res
+        return $res
+      }
     }
   } catch {}
+
+  # 2) папка shared fx — без запуска процесса
+  $pf = if ($env:ProgramW6432) { $env:ProgramW6432 } else { $env:ProgramFiles }
+  if ($pf) {
+    try {
+      $base = Join-Path $pf 'dotnet\shared\Microsoft.WindowsDesktop.App'
+      if (Test-Path -LiteralPath $base) {
+        $hit = Get-ChildItem -LiteralPath $base -Directory -ErrorAction SilentlyContinue |
+          Where-Object { Test-DotnetVersion $_.Name $want } |
+          Select-Object -First 1
+        if ($hit) {
+          $res.Installed = $true
+          $res.Detail = $hit.FullName
+          $Script:DotnetStatusCache = $res
+          return $res
+        }
+      }
+    } catch {}
+  }
+
+  # 3) dotnet --list-runtimes — только fallback, потому что это запуск процесса
+  try {
+    $cmd = Get-Command dotnet.exe -ErrorAction SilentlyContinue
+    if ($cmd -and $cmd.Source) {
+      $cap = Invoke-ProcessCapture -FilePath $cmd.Source -Arguments '--list-runtimes' -TimeoutSec 20
+      if ($cap.ExitCode -eq 0) {
+        $line = @($cap.Output -split "`r?`n") | Where-Object {
+          if ($_ -match 'Microsoft\.WindowsDesktop\.App\s+([0-9]+\.[0-9]+\.[0-9]+)') {
+            Test-DotnetVersion $matches[1] $want
+          } else { $false }
+        } | Select-Object -First 1
+        if ($line) {
+          $res.Installed = $true
+          $res.Detail = $line.Trim()
+        }
+      }
+    }
+  } catch {}
+
+  $Script:DotnetStatusCache = $res
   return $res
 }
 
@@ -271,6 +511,8 @@ function Get-AnimePresetStatus {
   # mpv.conf/input.conf: Low помечен «lower-end GPU / (Fast)» и использует
   # _S-варианты шейдеров, High — «higher-end GPU / (HQ)» и _VL-варианты.
   # Возвращает @{ State = 'None'|'Low'|'High'|'Unknown'; Files = <кол-во .glsl> }
+  param([switch]$Force)
+  if (-not $Force -and $null -ne $Script:AnimePresetCache) { return $Script:AnimePresetCache }
   $res = @{ State = 'None'; Files = 0 }
   $conf = Join-Path $Script:Cfg.ConfigDir 'mpv.conf'
   $shDir = Join-Path $Script:Cfg.ConfigDir 'shaders'
@@ -278,6 +520,7 @@ function Get-AnimePresetStatus {
   if (-not (Test-Path $conf)) {
     # конфига нет: шейдеры без конфига — частичная (неопознанная) установка
     if ($res.Files -gt 0) { $res.State = 'Unknown' }
+    $Script:AnimePresetCache = $res
     return $res
   }
   $blob = ''
@@ -291,6 +534,7 @@ function Get-AnimePresetStatus {
   } elseif ($blob -match 'Anime4K_') {
     $res.State = 'Unknown'   # шейдеры есть, но цепочки не из шаблонов Low/High
   }
+  $Script:AnimePresetCache = $res
   return $res
 }
 
@@ -317,61 +561,101 @@ function Invoke-DownloadFile {
     [int]$BarMin = 0,
     [int]$BarMax = 100
   )
-  $dir = Split-Path $Dest -Parent
-  if (-not (Test-Path $dir)) { New-Item $dir -ItemType Directory -Force | Out-Null }
-  if (Test-Path $Dest) { Remove-Item $Dest -Force }
-  Write-Log "Скачивание: $Url -> $Dest"
-  $req = [Net.HttpWebRequest]::Create($Url)
-  $req.UserAgent = 'Anime4K-Installer'
-  $req.AllowAutoRedirect = $true
-  $req.Timeout = 60000
-  $resp = $req.GetResponse()
+  $dir = Split-Path -Path $Dest -Parent
+  if ($dir -and -not (Test-Path -LiteralPath $dir)) {
+    New-Item -Path $dir -ItemType Directory -Force | Out-Null
+  }
   try {
-    $total = $resp.ContentLength
-    $src = $resp.GetResponseStream()
-    $fs = [IO.File]::Create($Dest)
+    if (Test-Path -LiteralPath $Dest) { Remove-Item -LiteralPath $Dest -Force }
+  } catch {}
+  Write-Log "Скачивание: $Url -> $Dest"
+
+  $attempts = 3
+  for ($attempt = 1; $attempt -le $attempts; $attempt++) {
+    $client = $null
+    $resp = $null
+    $stream = $null
+    $fs = $null
     try {
-      $buf = New-Object byte[] 65536
+      $client = New-Object System.Net.Http.HttpClient
+      $client.Timeout = [TimeSpan]::FromMinutes(15)
+      $client.DefaultRequestHeaders.UserAgent.ParseAdd('Anime4K-Installer')
+
+      $respTask = $client.GetAsync($Url, [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead)
+      $resp = Wait-UiTask $respTask
+      [void]$resp.EnsureSuccessStatusCode()
+
+      $total = 0L
+      $len = $resp.Content.Headers.ContentLength
+      if ($null -ne $len) { $total = [long]$len }
+
+      $streamTask = $resp.Content.ReadAsStreamAsync()
+      $stream = Wait-UiTask $streamTask
+      $fs = [IO.File]::Create($Dest)
+
+      # 1 МБ вместо 64 КБ: меньше итераций и обращений к диску
+      $buf = New-Object byte[] (1024 * 1024)
       [long]$got = 0
-      $last = -1
-      while (($n = $src.Read($buf, 0, $buf.Length)) -gt 0) {
+      $lastPct = -1
+      $lastUi = -1000
+      $uiSw = [Diagnostics.Stopwatch]::StartNew()
+
+      while ($true) {
+        $readTask = $stream.ReadAsync($buf, 0, $buf.Length)
+        $n = Wait-UiTask $readTask
+        if ($n -le 0) { break }
         $fs.Write($buf, 0, $n)
         $got += $n
-        if ($total -gt 0 -and $Bar) {
+
+        # UI обновляем не чаще 10 раз в секунду, а не на каждый процент/чанк
+        if ($Bar -and $total -gt 0 -and ($uiSw.ElapsedMilliseconds - $lastUi -ge 100)) {
           $pct = [int](($got * 100) / $total)
-          if ($pct -ne $last) {
-            $last = $pct
+          if ($pct -ne $lastPct) {
+            $lastPct = $pct
             $barVal = $BarMin + [int](($pct * ($BarMax - $BarMin)) / 100)
-            $Bar.Dispatcher.Invoke([action]{ $Bar.Value = $barVal })
+            $Bar.Value = $barVal
             if ($StatusLabel) {
               $mb = '{0:N1} / {1:N1} MB ({2}%)' -f ($got/1MB), ($total/1MB), $pct
-              $prefix = $(T DlProgress)
-              $StatusLabel.Dispatcher.Invoke([action]{ $StatusLabel.Text = "$prefix $mb" })
+              $StatusLabel.Text = "$(T DlProgress) $mb"
             }
           }
+          $lastUi = $uiSw.ElapsedMilliseconds
+          Invoke-UiPump -Ms 1
         }
-        # даём WPF отрисоваться и обработать ввод
-        [Windows.Threading.Dispatcher]::CurrentDispatcher.Invoke(
-          [action]{}, [Windows.Threading.DispatcherPriority]::Background)
       }
-    } finally { $fs.Close(); $src.Close() }
-  } finally { $resp.Close() }
-  Write-Log "Скачано: $Dest"
+
+      if ($total -gt 0 -and $got -ne $total) {
+        throw "Неполная загрузка: получено $got из $total байт."
+      }
+      $fs.Close(); $fs = $null
+      $stream.Dispose(); $stream = $null
+      $resp.Dispose(); $resp = $null
+      $client.Dispose(); $client = $null
+      Write-Log "Скачано: $Dest"
+      return
+    } catch {
+      if ($fs) { try { $fs.Close() } catch {} }
+      if ($stream) { try { $stream.Dispose() } catch {} }
+      if ($resp) { try { $resp.Dispose() } catch {} }
+      if ($client) { try { $client.Dispose() } catch {} }
+      try { if (Test-Path -LiteralPath $Dest) { Remove-Item -LiteralPath $Dest -Force } } catch {}
+
+      if ($attempt -ge $attempts) { throw }
+      Write-Log "Ошибка скачивания (попытка $attempt из $attempts): $($_.Exception.Message)" 'WARN'
+      Wait-UiSlice -Milliseconds (500 * $attempt)
+    }
+  }
 }
 
 function Invoke-ProcessWait {
   param([Parameter(Mandatory)][Diagnostics.Process]$Proc, [int]$TimeoutSec = 600)
   $sw = [Diagnostics.Stopwatch]::StartNew()
-  while (-not $Proc.HasExited) {
+  while (-not $Proc.WaitForExit(100)) {
     if ($sw.Elapsed.TotalSeconds -gt $TimeoutSec) {
       try { $Proc.Kill() } catch {}
       throw "Процесс превысил таймаут ${TimeoutSec}с: $($Proc.StartInfo.FileName)"
     }
-    Start-Sleep -Milliseconds 200
-    try {
-      [Windows.Threading.Dispatcher]::CurrentDispatcher.Invoke(
-        [action]{}, [Windows.Threading.DispatcherPriority]::Background)
-    } catch {}
+    Wait-UiSlice -Milliseconds 10
   }
   return $Proc.ExitCode
 }
@@ -391,8 +675,8 @@ function Install-MpvNetSetup {
   param([string]$SetupExe, [bool]$UseDispatcher = $true)
   Write-Log "Установка mpv.net системно: $SetupExe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /ALLUSERS"
   # Inno Setup: системная установка = /ALLUSERS, требует админа
-  $args = '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /ALLUSERS'
-  $p = [Diagnostics.Process]::Start($SetupExe, $args)
+  $arguments = '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /ALLUSERS'
+  $p = [Diagnostics.Process]::Start($SetupExe, $arguments)
   if ($UseDispatcher) { $code = Invoke-ProcessWait $p } else { $code = Invoke-ProcessWaitSilent $p }
   Write-Log "mpv.net setup exit code: $code"
   if ($code -ne 0) { throw "Установщик mpv.net вернул код $code" }
@@ -421,32 +705,45 @@ function Install-AnimePreset {
   if (-not (Test-Path $shDir)) { New-Item $shDir -ItemType Directory -Force | Out-Null }
 
   $url = if ($Which -eq 'Low') { $Script:Cfg.AnimeLowUrl } else { $Script:Cfg.AnimeHighUrl }
-  $zip = Join-Path $env:TEMP ("Anime4K_" + $Which + ".zip")
-  if ($Script:Bar -and $Script:LblStatus) {
-    Invoke-DownloadFile -Url $url -Dest $zip -Bar $Script:Bar -StatusLabel $Script:LblStatus -BarMin $BarMin -BarMax $BarMax
-  } else {
-    # silent: без UI
-    Write-Log "Скачивание пресета ${Which}: $url"
-    Invoke-WebRequest -Uri $url -OutFile $zip -Headers @{ 'User-Agent' = 'Anime4K-Installer' } -UseBasicParsing
-  }
-
-  $tmp = Join-Path $env:TEMP ("Anime4K_x_" + [Guid]::NewGuid().ToString('N'))
-  New-Item $tmp -ItemType Directory -Force | Out-Null
+  $work = New-TempDir
+  $zip = Join-Path $work ("Anime4K_$Which.zip")
+  $tmp = Join-Path $work 'extract'
   try {
+    # Всегда потоковый загрузчик: Invoke-WebRequest на 5.1 и медленнее, и буферизует файл целиком
+    $bar = $null
+    $status = $null
+    if ($Script:Bar -and $Script:LblStatus) { $bar = $Script:Bar; $status = $Script:LblStatus }
+    Invoke-DownloadFile -Url $url -Dest $zip -Bar $bar -StatusLabel $status -BarMin $BarMin -BarMax $BarMax
+
+    New-Item -Path $tmp -ItemType Directory -Force | Out-Null
     Write-Log "Распаковка $zip -> $tmp (перезапись молча)"
-    Expand-Archive -Path $zip -DestinationPath $tmp -Force
+    $extracted = $false
+    try {
+      # ZipFile быстрее Expand-Archive из-за отсутствия PowerShell-обвязки
+      Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction Stop
+      [IO.Compression.ZipFile]::ExtractToDirectory($zip, $tmp)
+      $extracted = $true
+    } catch {
+      # Fallback для сред без ZipFile
+      try { Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue } catch {}
+      New-Item -Path $tmp -ItemType Directory -Force | Out-Null
+      Expand-Archive -Path $zip -DestinationPath $tmp -Force
+      $extracted = $true
+    }
+    if (-not $extracted) { throw 'Не удалось распаковать архив пресета.' }
+
     # macOS-метаданные из архивов Tama47 mpv не нужны — вычищаем (__MACOSX, ._*, .DS_Store)
     $macDir = Join-Path $tmp '__MACOSX'
-    if (Test-Path $macDir) { Remove-Item $macDir -Recurse -Force -ErrorAction SilentlyContinue }
-    Get-ChildItem $tmp -Force -Recurse -File -ErrorAction SilentlyContinue |
+    if (Test-Path -LiteralPath $macDir) { Remove-Item -LiteralPath $macDir -Recurse -Force -ErrorAction SilentlyContinue }
+    Get-ChildItem -LiteralPath $tmp -Force -Recurse -File -ErrorAction SilentlyContinue |
       Where-Object { $_.Name -like '._*' -or $_.Name -eq '.DS_Store' } |
       Remove-Item -Force -ErrorAction SilentlyContinue
     # Архивы могут лежать либо плоско (mpv.conf в корне),
     # либо в одной вложенной папке — ищем реальный корень по mpv.conf
     $source = $tmp
-    if (-not (Test-Path (Join-Path $tmp 'mpv.conf'))) {
-      $sub = Get-ChildItem $tmp -Directory | ForEach-Object {
-        if (Test-Path (Join-Path $_.FullName 'mpv.conf')) { $_.FullName }
+    if (-not (Test-Path -LiteralPath (Join-Path $tmp 'mpv.conf'))) {
+      $sub = Get-ChildItem -LiteralPath $tmp -Directory | ForEach-Object {
+        if (Test-Path -LiteralPath (Join-Path $_.FullName 'mpv.conf')) { $_.FullName }
       } | Select-Object -First 1
       if ($sub) { $source = $sub }
     }
@@ -454,8 +751,7 @@ function Install-AnimePreset {
     Write-Log "Копирование в $dest с перезаписью (порядок шейдеров — как в mpv.conf из архива)"
     Copy-Item (Join-Path $source '*') -Destination $dest -Recurse -Force
   } finally {
-    try { Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue } catch {}
-    try { Remove-Item $zip -Force -ErrorAction SilentlyContinue } catch {}
+    try { Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue } catch {}
   }
   Write-Log "Пресет $Which установлен в $dest"
 }
@@ -2218,35 +2514,51 @@ function Show-StyledDialog {
 
 # ------------------------------------------------- Fluent chrome (dark titlebar + Mica) ---
 # Guard: повторный Add-Type в той же сессии падает, поэтому -as [type] проверка.
-# Важно: Handle валиден только после SourceInitialized, вызов до ShowDialog с $h=0 молча ничего не сделает.
-if (-not ('Win.DwmApi' -as [type])) {
-  Add-Type -Namespace Win -Name DwmApi -MemberDefinition @'
+# Загружаем лениво: в -Silent WPF и DWM вообще не нужны.
+function Initialize-DwmApi {
+  try {
+    if (-not ('Win.DwmApi' -as [type])) {
+      Add-Type -Namespace Win -Name DwmApi -MemberDefinition @'
 [System.Runtime.InteropServices.DllImport("dwmapi.dll")] public static extern int DwmSetWindowAttribute(System.IntPtr hwnd, int attr, ref int val, int size);
 [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)] public struct MARGINS { public int left; public int right; public int top; public int bottom; }
 [System.Runtime.InteropServices.DllImport("dwmapi.dll")] public static extern int DwmExtendFrameIntoClientArea(System.IntPtr hwnd, ref MARGINS margins);
 '@
+    }
+  } catch {}
 }
+
 function Get-WindowsBuild {
-  # Реестр не врёт о номере сборки, в отличие от Environment.OSVersion (нужен манифест)
+  # Реестр не врёт о номере сборки, в отличие от Environment.OSVersion (нужен манифест).
+  # Кэшируем: вызывается из Test-MicaUsable и Enable-FluentChrome для каждого окна.
+  if ($null -ne $Script:WindowsBuild) { return $Script:WindowsBuild }
+  $b = 0
   try {
     $cv = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' -ErrorAction SilentlyContinue
     if ($cv -and $cv.PSObject.Properties['CurrentBuildNumber']) {
-      $b = 0
-      if ([int]::TryParse([string]$cv.CurrentBuildNumber, [ref]$b)) { return $b }
+      [void][int]::TryParse([string]$cv.CurrentBuildNumber, [ref]$b)
     }
   } catch {}
-  try { return [Environment]::OSVersion.Version.Build } catch { return 0 }
+  if ($b -le 0) {
+    try { $b = [Environment]::OSVersion.Version.Build } catch { $b = 0 }
+  }
+  $Script:WindowsBuild = $b
+  return $b
 }
 
 function Test-MicaUsable {
   # Mica рисует DWM: нужны Windows 11, включённые эффекты прозрачности, локальная сессия
-  if ((Get-WindowsBuild) -lt 22000) { return $false }
-  try {
-    $tp = Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize' -ErrorAction SilentlyContinue
-    if ($tp -and $tp.PSObject.Properties['EnableTransparency'] -and [int]$tp.EnableTransparency -eq 0) { return $false }
-  } catch {}
-  if ($env:SESSIONNAME -like 'RDP*') { return $false }
-  return $true
+  if ($null -ne $Script:MicaUsable) { return $Script:MicaUsable }
+  $ok = $true
+  if ((Get-WindowsBuild) -lt 22000) { $ok = $false }
+  if ($ok) {
+    try {
+      $tp = Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize' -ErrorAction SilentlyContinue
+      if ($tp -and $tp.PSObject.Properties['EnableTransparency'] -and [int]$tp.EnableTransparency -eq 0) { $ok = $false }
+    } catch {}
+  }
+  if ($ok -and $env:SESSIONNAME -like 'RDP*') { $ok = $false }
+  $Script:MicaUsable = $ok
+  return $ok
 }
 
 # DWMWA_USE_IMMERSIVE_DARK_MODE (20) — тёмный заголовок.
@@ -2254,8 +2566,8 @@ function Test-MicaUsable {
 # DWMWA_MICA_EFFECT (1029): legacy-путь для 22000 (21H2), где атрибута 38 ещё нет.
 function Enable-FluentChrome {
   param($win)
+  Initialize-DwmApi
   $solid = $null
-  try { $solid = New-Object Windows.Media.SolidColorBrush ([Windows.Media.ColorConverter]::ConvertFromString('#202020')) } catch {}
   try {
     $h = (New-Object System.Windows.Interop.WindowInteropHelper -ArgumentList $win).Handle
     if ($h -eq [IntPtr]::Zero) { return $false } # ещё нет HWND — вызовет SourceInitialized
@@ -2297,9 +2609,15 @@ function Enable-FluentChrome {
     }
 
     # Windows 10 / выключены эффекты прозрачности / атрибут не принят — сплошной фон
+    if (-not $solid) {
+      try { $solid = New-Object Windows.Media.SolidColorBrush ([Windows.Media.ColorConverter]::ConvertFromString('#202020')) } catch {}
+    }
     if ($solid) { $win.Background = $solid }
     return $false
   } catch {
+    if (-not $solid) {
+      try { $solid = New-Object Windows.Media.SolidColorBrush ([Windows.Media.ColorConverter]::ConvertFromString('#202020')) } catch {}
+    }
     if ($solid) { try { $win.Background = $solid } catch {} }
     return $false
   }
@@ -2327,13 +2645,13 @@ function Show-RecheckFeedback {
 }
 
 function Update-StatusUI {
-  param([switch]$Notify)
-  $mpv = Get-MpvNetStatus
-  $dn = Get-DotnetStatus
-  # Токены B_Success/B_Error вместо LightGreen/Tomato — иначе выбиваются из палитры
-  $ok = New-Object Windows.Media.SolidColorBrush ([Windows.Media.ColorConverter]::ConvertFromString('#6CCB5F'))
-  $bad = New-Object Windows.Media.SolidColorBrush ([Windows.Media.ColorConverter]::ConvertFromString('#FF99A4'))
-  $warn = New-Object Windows.Media.SolidColorBrush ([Windows.Media.ColorConverter]::ConvertFromString('#FCE100'))
+  param([switch]$Notify, [switch]$Force)
+  $mpv = Get-MpvNetStatus -Force:$Force
+  $dn = Get-DotnetStatus -Force:$Force
+  # Кисти кэшируются в Get-LogBrush; раньше на каждый вызов создавались заново
+  $ok = Get-LogBrush 'B_Success' '#6CCB5F'
+  $bad = Get-LogBrush 'B_LogError' '#FF99A4'
+  $warn = Get-LogBrush 'B_LogWarn' '#FCE100'
   if ($mpv.Installed) {
     $Script:LblMpv.Text = $(T Installed) + $(if ($mpv.Version) { " • v$($mpv.Version)" }) + $(if ($mpv.Exe) { "`n$($mpv.Exe)" })
     $Script:DotMpv.Fill = $ok
@@ -2349,7 +2667,7 @@ function Update-StatusUI {
     $Script:DotNet.Fill = $bad
   }
   # Шаг 2: какой пресет шейдеров уже установлен (Low/High/не распознан/нет)
-  $pst = Get-AnimePresetStatus
+  $pst = Get-AnimePresetStatus -Force:$Force
   $Script:LblPreset.Text = Get-PresetStateText $pst
   $Script:DotPreset.Fill = switch ($pst.State) {
     'Low'     { $ok }
@@ -2357,10 +2675,6 @@ function Update-StatusUI {
     'Unknown' { $warn }
     default   { $bad }
   }
-  try {
-    [Windows.Threading.Dispatcher]::CurrentDispatcher.Invoke(
-      [action]{}, [Windows.Threading.DispatcherPriority]::Background)
-  } catch {}
   if ($Notify) { Show-RecheckFeedback }
 }
 
@@ -2428,11 +2742,15 @@ function Show-AboutWindow {
 # ------------------------------------------------- Главная процедура установки (UI-поток) ---
 function Start-FullInstall {
   if ($Script:Restarting) { return }  # новый экземпляр уже поднимается
+  if ($Script:InstallRunning) { return }
   $which = if ($Script:RbLow.IsChecked) { 'Low' } else { 'High' }
+  $Script:InstallRunning = $true
   $Script:BtnInstall.IsEnabled = $false
   $Script:Bar.IsIndeterminate = $false
   try { $Script:Bar.Foreground = $Script:Window.FindResource('B_Accent') } catch {}
+  $work = $null
   try {
+    Assert-64BitWindows
     if (-not (Test-IsAdmin)) {
       # Уже перезапускались с повышением, но прав нет — окна больше не плодим
       if ($Elevated) {
@@ -2476,53 +2794,53 @@ function Start-FullInstall {
     $Script:Bar.Value = 5
     $Script:LblStatus.Text = T StDetect
     Write-Log $(T StartLog)
-    $latest = Get-LatestMpvSetupUrl
-    Write-Log ("Latest mpv.net: {0} / {1}" -f $latest.Tag, $latest.Name)
-    $mpv = Get-MpvNetStatus
+    $work = New-TempDir
 
-    # --- mpv.net ---
-    $needMpv = -not $mpv.Installed
+    # --- mpv.net: ставим только если не найден (как .NET) ---
+    $mpv = Get-MpvNetStatus -Force
     if ($mpv.Installed) {
       Write-Log ($(T MpvHas) -f $mpv.Version, $mpv.Exe)
-      $needMpv = $true  # системный setup идемпотентен — прогоняем для гарантии нужной версии
-    }
-    if ($needMpv) {
+      $Script:Bar.Value = 55
+    } else {
+      $latest = Get-LatestMpvSetupUrl
+      Write-Log ("Latest mpv.net: {0} / {1}" -f $latest.Tag, $latest.Name)
       $Script:LblStatus.Text = T StDetect
       $Script:Bar.Value = 10
-      $setup = Join-Path $env:TEMP $latest.Name
+      $setup = Join-Path $work $latest.Name
       Invoke-DownloadFile -Url $latest.Url -Dest $setup -Bar $Script:Bar -StatusLabel $Script:LblStatus -BarMin 10 -BarMax 40
       $Script:LblStatus.Text = T StInstMpv
       $Script:Bar.Value = 45
       $Script:Bar.IsIndeterminate = $true
       Install-MpvNetSetup -SetupExe $setup -UseDispatcher $true
-      try { Remove-Item $setup -Force -ErrorAction SilentlyContinue } catch {}
       $Script:Bar.IsIndeterminate = $false
       $Script:Bar.Value = 55
+      $Script:MpvStatusCache = $null
     }
 
     # --- .NET ---
-    $dn = Get-DotnetStatus
+    $dn = Get-DotnetStatus -Force
     if (-not $dn.Installed) {
       $Script:LblStatus.Text = T StDlNet
       $Script:Bar.Value = 60
-      $nd = Join-Path $env:TEMP 'windowsdesktop-runtime-10.0.13-win-x64.exe'
+      $nd = Join-Path $work ([IO.Path]::GetFileName($Script:Cfg.DotnetUrl))
       Invoke-DownloadFile -Url $Script:Cfg.DotnetUrl -Dest $nd -Bar $Script:Bar -StatusLabel $Script:LblStatus -BarMin 60 -BarMax 70
       $Script:LblStatus.Text = T StInstNet
       $Script:Bar.IsIndeterminate = $true
       Install-DotnetRuntime -InstallerExe $nd -UseDispatcher $true
-      try { Remove-Item $nd -Force -ErrorAction SilentlyContinue } catch {}
       $Script:Bar.IsIndeterminate = $false
       $Script:Bar.Value = 75
+      $Script:DotnetStatusCache = $null
     } else {
       Write-Log ($(T NetHas) -f $dn.Detail)
     }
 
     # --- Anime4K пресет ---
-    $prev = Get-AnimePresetStatus
+    $prev = Get-AnimePresetStatus -Force
     Write-Log ($(T PstLog) -f (Get-PresetStateText $prev))
     $Script:LblStatus.Text = $(T StPreset) -f $which
     $Script:Bar.Value = 80
     Install-AnimePreset -Which $which -BarMin 80 -BarMax 93
+    $Script:AnimePresetCache = $null
     $Script:Bar.Value = 95
 
     Update-StatusUI
@@ -2544,6 +2862,10 @@ function Start-FullInstall {
       -Message ((T ErrMsg) -f $msg) -PathLabel (T ErrLogLabel) -Path $Script:Cfg.LogFile `
       -PrimaryText (T DlgOk))
   } finally {
+    if ($work) {
+      try { Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue } catch {}
+    }
+    $Script:InstallRunning = $false
     $Script:Bar.IsIndeterminate = $false
     # при перезапуске кнопку не возвращаем: окно уже закрывается
     if (-not $Script:Restarting) { $Script:BtnInstall.IsEnabled = $true }
@@ -2552,29 +2874,45 @@ function Start-FullInstall {
 
 # ------------------------------------------------- Silent-режим ---
 function Start-SilentInstall {
+  Assert-64BitWindows
   if (-not (Test-IsAdmin)) { throw $(T SneedAdmin) }
-  Write-Host $(T S1)
-  $latest = Get-LatestMpvSetupUrl
-  $setup = Join-Path $env:TEMP $latest.Name
-  Invoke-WebRequest -Uri $latest.Url -OutFile $setup -Headers @{ 'User-Agent' = 'Anime4K-Installer' } -UseBasicParsing
-  Install-MpvNetSetup -SetupExe $setup -UseDispatcher $false
-  Remove-Item $setup -Force -ErrorAction SilentlyContinue
-  Write-Host $(T S2)
-  $dn = Get-DotnetStatus
-  if (-not $dn.Installed) {
-    $nd = Join-Path $env:TEMP 'windowsdesktop-runtime-10.0.13-win-x64.exe'
-    Invoke-WebRequest -Uri $Script:Cfg.DotnetUrl -OutFile $nd -Headers @{ 'User-Agent' = 'Anime4K-Installer' } -UseBasicParsing
-    Install-DotnetRuntime -InstallerExe $nd -UseDispatcher $false
-    Remove-Item $nd -Force -ErrorAction SilentlyContinue
-  } else { Write-Host ($(T S2has) -f $dn.Detail) }
-  Write-Host ($(T S3) -f $Preset)
-  Install-AnimePreset -Which $Preset
-  Write-Host ($(T Sdone) -f $Script:Cfg.ConfigDir)
+  $work = $null
+  try {
+    $work = New-TempDir
+
+    # mpv.net: ставим только если не найден — как .NET ниже
+    $mpv = Get-MpvNetStatus -Force
+    if ($mpv.Installed) {
+      Write-Host ($(T MpvHas) -f $mpv.Version, $mpv.Exe)
+    } else {
+      Write-Host $(T S1)
+      $latest = Get-LatestMpvSetupUrl
+      $setup = Join-Path $work $latest.Name
+      Invoke-DownloadFile -Url $latest.Url -Dest $setup
+      Install-MpvNetSetup -SetupExe $setup -UseDispatcher $false
+    }
+
+    Write-Host $(T S2)
+    $dn = Get-DotnetStatus -Force
+    if (-not $dn.Installed) {
+      $nd = Join-Path $work ([IO.Path]::GetFileName($Script:Cfg.DotnetUrl))
+      Invoke-DownloadFile -Url $Script:Cfg.DotnetUrl -Dest $nd
+      Install-DotnetRuntime -InstallerExe $nd -UseDispatcher $false
+    } else { Write-Host ($(T S2has) -f $dn.Detail) }
+
+    Write-Host ($(T S3) -f $Preset)
+    Install-AnimePreset -Which $Preset
+    Write-Host ($(T Sdone) -f $Script:Cfg.ConfigDir)
+  } finally {
+    if ($work) {
+      try { Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue } catch {}
+    }
+  }
 }
 
 # ------------------------------------------------- Точка входа ---
 if ($Silent) {
-  Start-SilentInstall
+  try { Start-SilentInstall } finally { Close-LogWriter }
   return
 }
 
@@ -2623,7 +2961,7 @@ $Script:TxtLog    = $Script:Window.FindName('txtLog')
 
 if ($Preset -eq 'Low') { $Script:RbLow.IsChecked = $true } else { $Script:RbHigh.IsChecked = $true }
 
-$Script:Window.FindName('btnRecheck').Add_Click({ Update-StatusUI -Notify })
+$Script:Window.FindName('btnRecheck').Add_Click({ Update-StatusUI -Notify -Force })
 # RadioButton сам держит взаимоисключение (GroupName=Lang); Set-Language лишь
 # применяет перевод. Guard — чтобы IsChecked изнутри Set-Language не ушёл в рекурсию.
 $Script:Window.FindName('btnLangRu').Add_Checked({
@@ -2642,7 +2980,20 @@ $Script:Window.FindName('btnOpenConfig').Add_Click({
 })
 
 Write-Log $(T OpenLog)
-Set-Language 'RU'
+# Перевод и первый детект — только после появления окна: иначе старт визуально
+# висит, пока сканируется реестр и (в fallback) запускается dotnet.
+$Script:Window.Add_Loaded({
+  Set-Language $Script:Lang
+})
 # HWND готов только здесь; вызов раньше вернёт Zero и Mica не применится
 $Script:Window.Add_SourceInitialized({ [void](Enable-FluentChrome $Script:Window) })
-[void]$Script:Window.ShowDialog()
+# Во время установки не даём закрыть окно: код продолжит работать с уже
+# уничтоженными контролами.
+$Script:Window.Add_Closing({
+  if ($Script:InstallRunning -and -not $Script:Restarting) { $args[1].Cancel = $true }
+})
+try {
+  [void]$Script:Window.ShowDialog()
+} finally {
+  Close-LogWriter
+}
