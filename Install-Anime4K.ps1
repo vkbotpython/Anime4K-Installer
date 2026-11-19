@@ -839,7 +839,7 @@ $Script:ScrollBarXaml = @'
 $Script:MainXaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="mpv.net + Anime4K — Установщик" Height="915" Width="1100"
+        Title="mpv.net + Anime4K — Установщик" Height="935" Width="1100"
         MinHeight="600" MinWidth="820" WindowStartupLocation="CenterScreen"
         ResizeMode="CanMinimize"
         Background="Transparent" Foreground="#E6E6E6" FontFamily="Segoe UI Variable, Segoe UI" FontSize="14">
