@@ -986,6 +986,84 @@ $Script:MainXaml = @'
       <Setter Property="BorderThickness" Value="0"/>
       <Setter Property="HorizontalAlignment" Value="Stretch"/>
     </Style>
+    <!-- Выбор пресета: акцентный «чип» вместо стандартной радиокнопки.
+         Состояние видно по заливке, рамке, закрашенному кружку с галочкой и
+         бейджу справа (текст бейджа — в Tag, чтобы переводить его в Set-Language).
+         Шаблон растягивается на всю ширину карточки, поэтому клик по ней тоже
+         переключает пресет. -->
+    <Style x:Key="PresetRadio" TargetType="RadioButton">
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="FocusVisualStyle" Value="{StaticResource FocusRing}"/>
+      <Setter Property="Foreground" Value="{StaticResource B_TextPrimary}"/>
+      <Setter Property="FontSize" Value="14"/>
+      <Setter Property="FontWeight" Value="SemiBold"/>
+      <Setter Property="HorizontalAlignment" Value="Stretch"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="RadioButton">
+            <Border x:Name="chip" CornerRadius="8" BorderThickness="1"
+                    BorderBrush="Transparent" Background="Transparent" Padding="9,7">
+              <Grid>
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="Auto"/>
+                  <ColumnDefinition Width="*"/>
+                  <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <!-- Индикатор: пустое кольцо -> акцентный круг с галочкой -->
+                <Grid Width="18" Height="18" Margin="0,0,10,0" VerticalAlignment="Center">
+                  <Ellipse x:Name="ring" Stroke="#7E8798" StrokeThickness="1.5" Fill="Transparent"/>
+                  <Ellipse x:Name="core" Width="10" Height="10" Fill="{StaticResource B_Accent}" Opacity="0"/>
+                  <TextBlock x:Name="tick" FontFamily="{StaticResource F_Icons}" FontSize="10"
+                             Text="&#xE73E;" Foreground="#00131A" Opacity="0" Margin="0,0,0,1"
+                             HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                </Grid>
+                <ContentPresenter x:Name="header" Grid.Column="1" VerticalAlignment="Center"
+                                  HorizontalAlignment="Left"
+                                  TextBlock.Foreground="{StaticResource B_TextSec}"/>
+                <!-- Бейдж состояния: он есть и у невыбранного профиля, чтобы правая
+                     часть карточки не пустовала. Текст берём из Tag (выбран) и
+                     AutomationProperties.HelpText (не выбран) — оба переводятся. -->
+                <Border x:Name="badge" Grid.Column="2" CornerRadius="4" Padding="7,2"
+                        Background="#12FFFFFF" VerticalAlignment="Center">
+                  <Grid>
+                    <TextBlock x:Name="lblUnsel"
+                               Text="{Binding RelativeSource={RelativeSource TemplatedParent}, Path=(AutomationProperties.HelpText)}"
+                               Foreground="#8A8F9C" FontSize="10" FontWeight="SemiBold"/>
+                    <TextBlock x:Name="lblSel" Text="{TemplateBinding Tag}" Visibility="Collapsed"
+                               Foreground="{StaticResource B_Accent}" FontSize="10" FontWeight="Bold"/>
+                  </Grid>
+                </Border>
+              </Grid>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="chip" Property="Background" Value="#14FFFFFF"/>
+              </Trigger>
+              <Trigger Property="IsChecked" Value="False">
+                <Setter TargetName="badge" Property="Background" Value="#12FFFFFF"/>
+                <Setter TargetName="lblSel" Property="Visibility" Value="Collapsed"/>
+                <Setter TargetName="lblUnsel" Property="Visibility" Value="Visible"/>
+                <Setter TargetName="header" Property="TextBlock.Foreground" Value="{StaticResource B_TextSec}"/>
+              </Trigger>
+              <Trigger Property="IsChecked" Value="True">
+                <Setter TargetName="chip" Property="Background" Value="#1260CDFF"/>
+                <Setter TargetName="chip" Property="BorderBrush" Value="#8060CDFF"/>
+                <Setter TargetName="ring" Property="Stroke" Value="{StaticResource B_Accent}"/>
+                <Setter TargetName="core" Property="Opacity" Value="1"/>
+                <Setter TargetName="tick" Property="Opacity" Value="1"/>
+                <Setter TargetName="badge" Property="Background" Value="#2A60CDFF"/>
+                <Setter TargetName="lblSel" Property="Visibility" Value="Visible"/>
+                <Setter TargetName="lblUnsel" Property="Visibility" Value="Collapsed"/>
+                <Setter TargetName="header" Property="TextBlock.Foreground" Value="{StaticResource B_TextPrimary}"/>
+              </Trigger>
+              <Trigger Property="IsEnabled" Value="False">
+                <Setter TargetName="chip" Property="Opacity" Value="0.45"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
     <!-- Язык: один сегмент «пилюли» RU | EN. Подложку-акцент рисует соседний
          langInd (см. XAML шапки), поэтому фон сегмента прозрачный, а текст
          активного сегмента — тёмный (B_OnAccent), чтобы читался на акценте. -->
@@ -1247,14 +1325,14 @@ $Script:MainXaml = @'
       <UniformGrid Columns="2">
         <Border Style="{StaticResource Card}" Margin="0,0,6,12">
           <StackPanel>
-            <RadioButton x:Name="rbLow" Content="Low-end GPU" FontWeight="SemiBold" Foreground="#E6E6E6" GroupName="Preset"/>
+            <RadioButton x:Name="rbLow" Style="{StaticResource PresetRadio}" Content="Low-end GPU" Tag="ВЫБРАНО" AutomationProperties.HelpText="НЕ ВЫБРАНО" GroupName="Preset"/>
             <TextBlock x:Name="txtLowDesc" Style="{StaticResource Muted}" Text="GTX 980, GTX 1060, RX 570. Быстрые шейдеры, меньше нагрузка." Margin="0,6,0,0"/>
             <TextBlock Style="{StaticResource Muted}" Text="GLSL_Windows_Low-end.zip (Tama47 v4.0.1)"/>
           </StackPanel>
         </Border>
         <Border Style="{StaticResource Card}" Margin="6,0,0,12">
           <StackPanel>
-            <RadioButton x:Name="rbHigh" Content="High-end GPU" FontWeight="SemiBold" Foreground="#E6E6E6" GroupName="Preset" IsChecked="True"/>
+            <RadioButton x:Name="rbHigh" Style="{StaticResource PresetRadio}" Content="High-end GPU" Tag="ВЫБРАНО" AutomationProperties.HelpText="НЕ ВЫБРАНО" GroupName="Preset" IsChecked="True"/>
             <TextBlock x:Name="txtHighDesc" Style="{StaticResource Muted}" Text="GTX 1080, RTX 2070/3060, RX 590, Vega 56, 5700XT, 6600XT." Margin="0,6,0,0"/>
             <TextBlock Style="{StaticResource Muted}" Text="GLSL_Windows_High-end.zip (Tama47 v4.0.1)"/>
           </StackPanel>
@@ -1690,6 +1768,8 @@ $Script:T = @{
     MpvSub      = 'Установщик: *-setup-x64.exe, ключи /VERYSILENT /ALLUSERS'
     DotNotFound = 'Не найден — будет установлен 10.0.13.'
     Step2       = 'Шаг 2 — Пресет Anime4K (папка %APPDATA%\mpv.net, перезапись молча)'
+    Selected    = 'ВЫБРАНО'
+    NotSelected = 'НЕ ВЫБРАНО'
     LowDesc     = 'GTX 980, GTX 1060, RX 570. Быстрые шейдеры, меньше нагрузка.'
     HighDesc    = 'GTX 1080, RTX 2070/3060, RX 590, Vega 56, 5700XT, 6600XT.'
     ShaderNote  = 'Порядок и приоритет шейдеров берутся из mpv.conf внутри архива — скрипт их не переписывает, только копирует файлы с перезаписью.'
@@ -1786,6 +1866,8 @@ $Script:T = @{
     MpvSub      = 'Installer: *-setup-x64.exe, flags /VERYSILENT /ALLUSERS'
     DotNotFound = 'Not found — 10.0.13 will be installed.'
     Step2       = 'Step 2 — Anime4K preset (folder %APPDATA%\mpv.net, silent overwrite)'
+    Selected    = 'SELECTED'
+    NotSelected = 'NOT SELECTED'
     LowDesc     = 'GTX 980, GTX 1060, RX 570. Fast shaders, lower GPU load.'
     HighDesc    = 'GTX 1080, RTX 2070/3060, RX 590, Vega 56, 5700XT, 6600XT.'
     ShaderNote  = 'Shader order and priority come from mpv.conf inside the archive — the script does not rewrite them, it only copies files with overwrite.'
@@ -1907,6 +1989,12 @@ function Set-Language {
   $w.FindName('txtMpvTitle').Text    = T MpvTitle
   $w.FindName('txtMpvSub').Text      = T MpvSub
   $w.FindName('txtStep2').Text       = T Step2
+  # Текст бейджа активного пресета живёт в Tag радиокнопок (он же подставляется
+  # в шаблон через TemplateBinding), поэтому при смене языка обновляем и его.
+  $w.FindName('rbLow').Tag           = T Selected
+  $w.FindName('rbHigh').Tag          = T Selected
+  [Windows.Automation.AutomationProperties]::SetHelpText($w.FindName('rbLow'),  (T NotSelected))
+  [Windows.Automation.AutomationProperties]::SetHelpText($w.FindName('rbHigh'), (T NotSelected))
   $w.FindName('txtLowDesc').Text     = T LowDesc
   $w.FindName('txtHighDesc').Text    = T HighDesc
   $w.FindName('txtShaderNote').Text  = T ShaderNote
